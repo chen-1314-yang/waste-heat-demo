@@ -747,6 +747,7 @@ lam_grid = np.linspace(0.0, 1.0, 11)
 if survivors:
     X_lam = build_matrix(survivors, t_src, m_dot, medium, hours, dT)
     top1, top2, top3, c_top1 = [], [], [], []
+    c_base = None
     for lam_t in lam_grid:
         w = combined_weights(float(lam_t), X_lam)
         c_t = topsis(X_lam, w)
@@ -755,9 +756,13 @@ if survivors:
         top2.append(survivors[int(order[1])] if len(order) > 1 else "—")
         top3.append(survivors[int(order[2])] if len(order) > 2 else "—")
         c_top1.append(round(float(c_t[order[0]]), 3))
+        if c_base is None:
+            c_base = float(c_t[order[0]])
+    delta = [f"{c - c_base:+.3f}" for c in c_top1]
     df_s = pd.DataFrame({"λ": [f"{v:.2f}" for v in lam_grid],
                          "第一名": top1, "第二名": top2, "第三名": top3,
-                         "第一名贴近度": c_top1})
+                         "榜首贴近度 C(λ)": c_top1,
+                         "ΔC vs λ=0": delta})
     st.dataframe(style_lambda_table(df_s), use_container_width=True, hide_index=True)
     # 贴近度-λ 曲线：权重对每个候选的影响一目了然
     st.plotly_chart(lambda_figure(survivors, X_lam), use_container_width=True)
