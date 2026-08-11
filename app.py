@@ -498,43 +498,41 @@ with st.sidebar:
 keep, reasons = stage1(t_src, demand, continuity)
 survivors = [p for p in PATH_NAMES if keep[p]]
 
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.markdown('<div class="sec-title"><span class="tag">01</span>第一级 · 热力学规则粗筛</div>',
-                unsafe_allow_html=True)
-    rows = [{"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除", "原因": reasons[p]}
-            for p in PATH_NAMES]
-    st.dataframe(style_stage_table(pd.DataFrame(rows)), use_container_width=True,
-                 hide_index=True)
-    st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
-
-with col2:
-    st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序</div>',
-                unsafe_allow_html=True)
-    if survivors:
-        w5 = combined_weights(lam)
-        X = np.array([RAW[p] for p in survivors], dtype=float)
-        c = topsis(X, w5)
-        df_r = pd.DataFrame({
-            "路径": survivors, "能效%": X[:, 0], "投资万元/MW": X[:, 1],
-            "回收期年": X[:, 2], "CO2减排t/年(演示)": X[:, 3], "政策分": X[:, 4],
-            "TOPSIS贴近度": np.round(c, 4),
-        }).sort_values("TOPSIS贴近度", ascending=False).reset_index(drop=True)
-        df_r.insert(0, "排名", range(1, len(df_r) + 1))
-        st.dataframe(style_topsis_table(df_r), use_container_width=True,
-                     hide_index=True)
-        st.markdown(
-            f'<div class="rec-banner">推荐路径：<b>{df_r.iloc[0]["路径"]}</b>'
-            f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
-            f' · 权重来自 AHP+熵权组合赋权</span></div>',
+st.markdown('<div class="sec-title"><span class="tag">01</span>第一级 · 热力学规则粗筛</div>',
             unsafe_allow_html=True)
-        st.caption("指标为典型演示值，正式应用须替换为文献/实测数据；权重来自 eval_index_system.py 的 AHP+熵权组合赋权。")
-        csv = df_r.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button("下载排序结果 CSV", data=csv,
-                           file_name="两级决策_演示结果.csv", mime="text/csv")
-    else:
-        st.warning("无候选路径，请调整参数")
+rows = [{"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除", "原因": reasons[p]}
+        for p in PATH_NAMES]
+st.dataframe(style_stage_table(pd.DataFrame(rows)), use_container_width=True,
+             hide_index=True)
+st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
+
+st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
+
+st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序</div>',
+            unsafe_allow_html=True)
+if survivors:
+    w5 = combined_weights(lam)
+    X = np.array([RAW[p] for p in survivors], dtype=float)
+    c = topsis(X, w5)
+    df_r = pd.DataFrame({
+        "路径": survivors, "能效%": X[:, 0], "投资万元/MW": X[:, 1],
+        "回收期年": X[:, 2], "CO2减排t/年(演示)": X[:, 3], "政策分": X[:, 4],
+        "TOPSIS贴近度": np.round(c, 4),
+    }).sort_values("TOPSIS贴近度", ascending=False).reset_index(drop=True)
+    df_r.insert(0, "排名", range(1, len(df_r) + 1))
+    st.dataframe(style_topsis_table(df_r), use_container_width=True,
+                 hide_index=True)
+    st.markdown(
+        f'<div class="rec-banner">推荐路径：<b>{df_r.iloc[0]["路径"]}</b>'
+        f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
+        f' · 权重来自 AHP+熵权组合赋权</span></div>',
+        unsafe_allow_html=True)
+    st.caption("指标为典型演示值，正式应用须替换为文献/实测数据；权重来自 eval_index_system.py 的 AHP+熵权组合赋权。")
+    csv = df_r.to_csv(index=False, encoding="utf-8-sig")
+    st.download_button("下载排序结果 CSV", data=csv,
+                       file_name="两级决策_演示结果.csv", mime="text/csv")
+else:
+    st.warning("无候选路径，请调整参数")
 
 st.divider()
 
