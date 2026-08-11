@@ -407,8 +407,8 @@ def heat_reduction(t_src, m_dot, medium, hours, dT):
 # 论文风图表（白底、细线、无网格）
 # ---------------------------------------------------------------
 CHART_FONT = dict(family="Microsoft YaHei, PingFang SC, sans-serif",
-                  color="#1F2937", size=12)
-GRID = "#E5E7EB"
+                  color="#E2E8F0", size=12)
+GRID = "rgba(148,163,184,.18)"
 
 
 def style_stage_table(df):
@@ -487,8 +487,8 @@ def lambda_figure(survivors, X_lam):
             marker=dict(size=5),
             hovertemplate=f"{p}<br>λ=%{{x:.2f}} 贴近度=%{{y:.3f}}<extra></extra>"))
     fig.update_layout(
-        template="plotly_white", paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF", height=420, font=CHART_FONT,
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=420, font=CHART_FONT,
         xaxis=dict(showgrid=False, zeroline=False,
                    title="λ（0=纯熵权，1=纯AHP）", tickmode="linear", dtick=0.1),
         yaxis=dict(showgrid=False, zeroline=False, title="TOPSIS 贴近度",
@@ -508,29 +508,29 @@ def pareto_figure():
         x=front["Q_in_kW"], y=front["net_kW"], mode="markers",
         marker=dict(size=8, color=front["thermal_eff"],
                     colorscale=[[0, "#0EA5E9"], [0.5, "#22D3EE"], [1, "#34D399"]],
-                    opacity=0.65, line=dict(width=0, color="#FFFFFF"),
+                    opacity=0.65, line=dict(width=0, color="#0B1220"),
                     colorbar=dict(title="热效率", thickness=14,
-                                  tickfont=dict(color="#4B5563", size=11))),
+                                  tickfont=dict(color="#94A3B8", size=11))),
         name="pymoo 100 解（代理预测）",
         hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>热效率 %{marker.color:.3f}<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=real["Q_in_kW"], y=real["net_kW"], mode="lines+markers",
-        line=dict(color="#0072B2", width=1.8, shape="spline"),
-        marker=dict(size=8, color="#0072B2",
-                    line=dict(color="#FFFFFF", width=1)),
+        line=dict(color="#56B4E9", width=1.8, shape="spline"),
+        marker=dict(size=8, color="#56B4E9",
+                    line=dict(color="#0B1220", width=1)),
         name="22 解（DWSIM 复核）",
         hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br><extra>22 解复核</extra>"))
     fig.add_trace(go.Scatter(
         x=ver["dwsim_qin"], y=ver["dwsim_net"], mode="markers+text",
-        marker=dict(symbol="star", size=14, color="#D55E00",
-                    line=dict(color="#FFFFFF", width=1)),
+        marker=dict(symbol="star", size=14, color="#FBBF24",
+                    line=dict(color="#0B1220", width=1)),
         text=[f"{e:.1f}%" for e in ver["net_err_pct"]],
-        textposition="top center", textfont=dict(color="#D55E00", size=11),
+        textposition="top center", textfont=dict(color="#FBBF24", size=11),
         name="5 个 DWSIM 复核点",
         hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>误差 %{text}<extra></extra>"))
     fig.update_layout(
-        template="plotly_white", paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF", height=470, font=CHART_FONT,
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
         xaxis=dict(showgrid=False, zeroline=False, title="吸热量 Q_in (kW)"),
         yaxis=dict(showgrid=False, zeroline=False, title="净功率 (kW)"),
         legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
@@ -551,27 +551,27 @@ def pareto_co2_figure():
     pf = real.sort_values("cost")
     fig.add_trace(go.Scatter(
         x=pf["cost"], y=pf["co2"], mode="lines",
-        line=dict(color="#0072B2", width=1.8),
+        line=dict(color="#56B4E9", width=1.8),
         opacity=0.9, name="DWSIM 复核前沿（22 解）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=real["cost"], y=real["co2"], mode="markers",
-        marker=dict(size=8, color="#0072B2",
-                    line=dict(color="#FFFFFF", width=1)),
+        marker=dict(size=8, color="#56B4E9",
+                    line=dict(color="#0B1220", width=1)),
         name="DWSIM 复核点", showlegend=False,
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<br>净功率 %{customdata[0]:.1f} kW<extra></extra>",
         customdata=real[["net_kW"]].values))
     best = real.loc[real["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
         x=[best["cost"]], y=[best["co2"]], mode="markers",
-        marker=dict(symbol="star", size=14, color="#D55E00",
-                    line=dict(color="#FFFFFF", width=1)),
+        marker=dict(symbol="star", size=14, color="#FBBF24",
+                    line=dict(color="#0B1220", width=1)),
         name=f"最优点 {best['net_kW']:.1f} kW",
         hovertemplate="最优点<br>净功率 %{customdata[0]:.1f} kW<extra></extra>",
         customdata=[[best["net_kW"]]]))
     fig.update_layout(
-        template="plotly_white", paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF", height=470, font=CHART_FONT,
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
         xaxis=dict(showgrid=False, zeroline=False,
                    title="设备成本代理（万元，示意）"),
         yaxis=dict(showgrid=False, zeroline=False,
@@ -591,23 +591,23 @@ def lca_figure():
                     colorscale=[[0, "#0EA5E9"], [1, "#34D399"]],
                     cornerradius=6, line=dict(width=0)),
         text=df["月度降碳tCO2"].round(1).astype(str),
-        textposition="outside", textfont=dict(color="#4B5563", size=9),
+        textposition="outside", textfont=dict(color="#94A3B8", size=9),
         hovertemplate="%{x}月 降碳 %{y:.1f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=df["月份"], y=df["累计降碳tCO2"], mode="lines+markers",
         name="累计 (tCO2)", yaxis="y2",
-        line=dict(color="#E69F00", width=2),
-        marker=dict(size=6, color="#E69F00", line=dict(color="#FFFFFF", width=1)),
+        line=dict(color="#FBBF24", width=2),
+        marker=dict(size=6, color="#FBBF24", line=dict(color="#0B1220", width=1)),
         hovertemplate="%{x}月 累计 %{y:.1f} tCO2<extra></extra>"))
     fig.update_layout(
-        template="plotly_white", paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF", height=440, font=CHART_FONT,
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=440, font=CHART_FONT,
         bargap=0.32,
         xaxis=dict(showgrid=False, zeroline=False, title="月份"),
         yaxis=dict(showgrid=False, zeroline=False, title="月度降碳 (tCO2)"),
         yaxis2=dict(overlaying="y", side="right", showgrid=False,
                     zeroline=False, title="累计 (tCO2)",
-                    tickfont=dict(color="#B45309")),
+                    tickfont=dict(color="#FBBF24")),
         legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
                     font=dict(size=12)),
         margin=dict(l=40, r=46, t=30, b=40))
@@ -727,17 +727,17 @@ st.divider()
 
 st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
             unsafe_allow_html=True)
-st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 22 解 DWSIM 复核｜红星 = 5 个复核点（标注误差）</div>',
+st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 22 解 DWSIM 复核｜金星 = 5 个复核点（标注误差）</div>',
             unsafe_allow_html=True)
 st.plotly_chart(pareto_figure(), use_container_width=True)
 st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-st.markdown('<div class="sec-note">碳减排—成本权衡：蓝线 = 22 个 DWSIM 复核前沿解（互不支配）；红星 = 最优点；碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
+st.markdown('<div class="sec-note">碳减排—成本权衡：蓝线 = 22 个 DWSIM 复核前沿解（互不支配）；金星 = 最优点；碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
             unsafe_allow_html=True)
 st.plotly_chart(pareto_co2_figure(), use_container_width=True)
 st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
 st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
             unsafe_allow_html=True)
-st.markdown('<div class="sec-note">蓝绿柱 = 月度降碳｜橙线 = 全年累计（推算口径，年 173.2 tCO2）；'
+st.markdown('<div class="sec-note">蓝绿柱 = 月度降碳｜金线 = 全年累计（推算口径，年 173.2 tCO2）；'
             '考虑设备制造排放 7.2 tCO2e（20 年摊销 0.36 t/年，工程估算），'
             '全生命周期口径年净降碳约 172.8 tCO2</div>',
             unsafe_allow_html=True)
