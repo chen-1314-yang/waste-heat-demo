@@ -472,6 +472,33 @@ def style_lambda_table(df):
               }]))
 
 
+def lambda_figure(survivors, X_lam):
+    """贴近度随 λ 的变化曲线：权重影响直观可见（即使第一名不变，曲线也在移动）。"""
+    lam_grid = np.linspace(0.0, 1.0, 21)
+    c_all = np.zeros((len(survivors), len(lam_grid)))
+    for k, lam_t in enumerate(lam_grid):
+        w = combined_weights(float(lam_t), X_lam)
+        c_all[:, k] = topsis(X_lam, w)
+    fig = go.Figure()
+    for i, p in enumerate(survivors):
+        fig.add_trace(go.Scatter(
+            x=lam_grid, y=c_all[i], mode="lines+markers",
+            name=p, line=dict(color=PATH_COLORS.get(p, "#64748B"), width=2.5),
+            marker=dict(size=5),
+            hovertemplate=f"{p}<br>λ=%{{x:.2f}} 贴近度=%{{y:.3f}}<extra></extra>"))
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=420, font=CHART_FONT,
+        xaxis=dict(gridcolor=GRID, zeroline=False,
+                   title="λ（0=纯熵权，1=纯AHP）", tickmode="linear", dtick=0.1),
+        yaxis=dict(gridcolor=GRID, zeroline=False, title="TOPSIS 贴近度",
+                   range=[0, 1.05]),
+        legend=dict(orientation="h", y=1.12, x=0, bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=11)),
+        margin=dict(l=40, r=20, t=40, b=40))
+    return fig
+
+
 def pareto_figure():
     front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
     real = load_front_real(_mtime("pareto_front_real.csv")).sort_values("Q_in_kW")
@@ -732,6 +759,20 @@ if survivors:
                          "第一名": top1, "第二名": top2, "第三名": top3,
                          "第一名贴近度": c_top1})
     st.dataframe(style_lambda_table(df_s), use_container_width=True, hide_index=True)
+    # 贴近度-λ 曲线：权重对每个候选的影响一目了然
+    st.plotly_chart(lambda_figure(survivors, X_lam), use_container_width=True)
+    # 排序快照：λ=0 / 0.5 / 1 的完整排序（含贴近度）
+    snap = []
+    for lam_t in (0.0, 0.5, 1.0):
+        w = combined_weights(float(lam_t), X_lam)
+        c_t = topsis(X_lam, w)
+        order = np.argsort(-c_t)
+        snap.append(f"λ={lam_t:.1f}：" +
+                    " ＞ ".join(f"{survivors[j]}({c_t[j]:.3f})" for j in order))
+    st.markdown("**排序快照**　" + "　｜　".join(snap), unsafe_allow_html=True)
+    if len(survivors) <= 2:
+        st.info("当前场景候选路径较少（≤2 条）：熵权信息量低，λ 的影响主要体现在贴近度数值变化；"
+                "切换到「供暖/热水」或「储热调峰」等候选较多的场景，可看到第 2/3 名排序随 λ 变化。")
     stable = len(set(top1)) == 1
     if stable:
         lo, hi = min(c_top1), max(c_top1)
