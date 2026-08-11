@@ -210,23 +210,50 @@ MAP_TO_TOPSIS = {
 }
 
 
-def combined_weights(lam):
+def entropy_weights(X):
+    """熵权法：基于当前候选矩阵动态计算客观权重（min-max 归一化 + 熵）。
+    零方差列（无区分度）权重为 0，防止除零。"""
+    n, m = X.shape
+    xmin = X.min(axis=0)
+    xmax = X.max(axis=0)
+    span = xmax - xmin
+    # 方向处理：成本型指标取倒数方向（越小越好 → 越大越优）
+    xr = np.zeros_like(X, dtype=float)
+    for j in range(m):
+        if span[j] < 1e-12:
+            xr[:, j] = 1.0
+        elif DIRECTIONS[j] == "max":
+            xr[:, j] = (X[:, j] - xmin[j]) / span[j]
+        else:
+            xr[:, j] = (xmax[j] - X[:, j]) / span[j]
+    p = (xr + 1e-10) / (xr.sum(axis=0) + 1e-10)
+    e = -np.sum(p * np.log(p), axis=0) / np.log(n)
+    w = (1.0 - e) / (1.0 - e).sum()
+    return w
+
+
+def combined_weights(lam, X=None):
     d = load_weights()
     names = d["指标"]
-    w_sub = np.array(d["主观权重_AHP"], dtype=float)
-    w_obj = np.array(d["客观权重_熵权"], dtype=float)
-    w_all = lam * w_sub + (1 - lam) * w_obj
-    w_all = w_all / w_all.sum()
-    lookup = dict(zip(names, w_all))
-    # 前 5 个指标直接映射创新点1组合权重；运行成本为新增经济性指标，
-    # 从经济性维度（初始投资+投资回收期）中分出 25% 权重，其余 75% 保持原比例。
-    eco = lookup["初始投资"] + lookup["投资回收期"]
-    w6 = np.array([lookup[MAP_TO_TOPSIS[c]] for c in INDICATORS[:5]] + [0.25 * eco])
-    return w6 / w6.sum()
+    # 主观部分：AHP 固定权重（演示假设），映射到 TOPSIS 6 指标并归一化
+    lookup_sub = dict(zip(names, np.array(d["主观权重_AHP"], dtype=float)))
+    w_sub6 = np.array([lookup_sub[MAP_TO_TOPSIS[c]] for c in INDICATORS[:5]]
+                      + [0.25 * (lookup_sub["初始投资"] + lookup_sub["投资回收期"])])
+    w_sub6 = w_sub6 / w_sub6.sum()
+    if X is not None:
+        w_obj6 = entropy_weights(X)          # 客观部分：熵权随当前候选矩阵动态计算
+    else:
+        lookup_obj = dict(zip(names, np.array(d["客观权重_熵权"], dtype=float)))
+        w_obj6 = np.array([lookup_obj[MAP_TO_TOPSIS[c]] for c in INDICATORS[:5]]
+                          + [0.25 * (lookup_obj["初始投资"] + lookup_obj["投资回收期"])])
+        w_obj6 = w_obj6 / w_obj6.sum()
+    w_all = lam * w_sub6 + (1 - lam) * w_obj6
+    return w_all / w_all.sum()
 
 
 def topsis(matrix, weights):
-    norm = matrix / np.sqrt((matrix ** 2).sum(axis=0))
+    # 防除零：全 0 / 零方差列（如减排列无区分度时）归一化不产生 nan
+    norm = matrix / np.sqrt((matrix ** 2).sum(axis=0) + 1e-12)
     v = norm * weights
     ideal_pos = np.array([
         v[:, j].max() if DIRECTIONS[j] == "max" else v[:, j].min()
@@ -237,6 +264,26 @@ def topsis(matrix, weights):
     d_pos = np.sqrt(((v - ideal_pos) ** 2).sum(axis=1))
     d_neg = np.sqrt(((v - ideal_neg) ** 2).sum(axis=1))
     return d_neg / (d_pos + d_neg + 1e-12)
+
+
+def build_matrix(survivors, t_src, m_dot, medium, hours, dT):
+    """构建 TOPSIS 决策矩阵：减排列/运行成本按当前参数动态推算（主表与 λ 敏感性共用）。"""
+    X = np.array([RAW[p] for p in survivors], dtype=float)
+    for i, p in enumerate(survivors):
+        if p == "ORC 余热发电":
+            r = orc_reduction(t_src, hours, dT)
+            if r:
+                X[i, 3] = round(r["co2"], 1)
+        elif p == "压缩式热泵提温":
+            # 运行成本随当前运行小时联动：0.357 MW电/MW热 × hours × 0.65 元/kWh
+            X[i, 3] = round(heat_reduction(t_src, m_dot, medium, hours, dT)["co2"], 1)
+            X[i, 5] = round(0.357 * hours * 0.65 * 1000 / 10000, 1)
+        elif p in ("吸收式热泵提温", "直接换热供暖",
+                   "余热锅炉直接产汽", "热化学储热", "相变储热"):
+            r = heat_reduction(t_src, m_dot, medium, hours, dT)
+            if r:
+                X[i, 3] = round(r["co2"], 1)
+    return X
 
 
 def stage1(t_src, demand, continuity, t_steam=152):
@@ -448,6 +495,45 @@ def pareto_figure():
     return fig
 
 
+def pareto_co2_figure():
+    """碳减排—成本—能效 帕累托散点图（碳减排=净功率×8000h×0.581，推算口径）。"""
+    front = load_front_pymoo()
+    real = load_front_real()
+    front = front.assign(co2=front["net_kW"] * 8000.0 / 1000.0 * 0.581,
+                         cost=front["cost_proxy"])
+    real = real.assign(co2=real["net_kW"] * 8000.0 / 1000.0 * 0.581)
+    real = real.assign(cost=0.12 * real["Q_in_kW"]
+                       + 30.0 * (real["pump_outlet_Pa"] / 1e6) ** 2
+                       + 120.0 * (1.0 - real["expander_eff"]))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=front["cost"], y=front["co2"], mode="markers",
+        marker=dict(size=8, color=front["thermal_eff"],
+                    colorscale="Viridis", opacity=0.85,
+                    colorbar=dict(title="热效率", thickness=14,
+                                  tickfont=dict(color="#94A3B8", size=11))),
+        name="pymoo 100 解（代理预测）",
+        hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=real["cost"], y=real["co2"], mode="markers",
+        marker=dict(symbol="star", size=13, color="#FBBF24",
+                    line=dict(color="#0B1220", width=1)),
+        name="22 解（DWSIM 真实复核）",
+        hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<br>净功率 %{customdata[0]:.1f} kW<extra></extra>",
+        customdata=real[["net_kW"]].values))
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
+        xaxis=dict(gridcolor=GRID, zeroline=False,
+                   title="设备成本代理（万元，示意）"),
+        yaxis=dict(gridcolor=GRID, zeroline=False,
+                   title="年碳减排（tCO2/年，推算口径）"),
+        legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=12)),
+        margin=dict(l=40, r=20, t=30, b=40))
+    return fig
+
+
 def lca_figure():
     df = load_lca_monthly()
     fig = go.Figure()
@@ -523,19 +609,8 @@ st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
 st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序</div>',
             unsafe_allow_html=True)
 if survivors:
-    w5 = combined_weights(lam)
-    X = np.array([RAW[p] for p in survivors], dtype=float)
-    # 减排列按当前参数动态推算（可复算）；无仿真/估算模型的路径显示"—"
-    for i, p in enumerate(survivors):
-        if p == "ORC 余热发电":
-            r = orc_reduction(t_src, hours, dT)
-            if r:
-                X[i, 3] = round(r["co2"], 1)
-        elif p in ("吸收式热泵提温", "压缩式热泵提温", "直接换热供暖",
-                   "余热锅炉直接产汽", "热化学储热", "相变储热"):
-            r = heat_reduction(t_src, m_dot, medium, hours, dT)
-            if r:
-                X[i, 3] = round(r["co2"], 1)
+    X = build_matrix(survivors, t_src, m_dot, medium, hours, dT)
+    w5 = combined_weights(lam, X)
     c = topsis(X, w5)
     df_r = pd.DataFrame({
         "路径": survivors,
@@ -557,15 +632,15 @@ if survivors:
         f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
         f' · 权重来自 AHP+熵权组合赋权</span></div>',
         unsafe_allow_html=True)
-    st.caption("数据口径：能效列中 ORC 为 DWSIM 仿真中位热效率；压缩式热泵为一次能源效率"
+    st.caption("数据口径：能效列中 ORC 为 DWSIM 仿真推荐设计点热效率（12.3%）；压缩式热泵为一次能源效率"
                "（COP2.8×电网效率38%≈106%），吸收式热泵为余热自驱动 COP0.75，直接换热/余热锅炉为热回收率；"
                "减排列按当前参数推算（替代购电/替代天然气），可复算；**投资/回收期**：ORC 引自《重庆大学学报》"
                "(23800元/kW、5.58年)，压缩式与吸收式热泵的回收期引自同一对比研究"
                "（李萌：4.23年/2.73年），投资为工程估算（大庆改造案例 627万/14.4MW 为特例，见案例对标），"
                "直接换热/余热锅炉为工程估算，储热与 TEG 为示意；**运行成本**：压缩式按 COP2.8 反推耗电"
-               "×8000h×0.65元/kWh 推算，其余为工程估算；**政策分**按《节能降碳中央预算内投资专项管理办法》"
+               "×当前运行小时×0.65元/kWh 动态推算，其余为工程估算；**政策分**按《节能降碳中央预算内投资专项管理办法》"
                "与《绿色低碳转型产业指导目录(2024年版)》收录情况打分，详见《数据来源台账》；"
-               "权重为演示权重（AHP 矩阵为演示假设）。")
+               "主观权重 AHP 为演示假设（需专家打分），客观熵权随当前候选矩阵动态计算。")
     csv = df_r.to_csv(index=False, encoding="utf-8-sig")
     st.download_button("下载排序结果 CSV", data=csv,
                        file_name="两级决策_演示结果.csv", mime="text/csv")
@@ -608,9 +683,15 @@ st.markdown('<div class="sec-note">青色点 = 代理预测 100 解｜绿色线 
             unsafe_allow_html=True)
 st.plotly_chart(pareto_figure(), use_container_width=True)
 st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
+st.markdown('<div class="sec-note">碳减排—成本—能效权衡：碳减排 = 净功率 × 8000h × 0.581（推算口径）；金星 = 22 个 DWSIM 复核点</div>',
+            unsafe_allow_html=True)
+st.plotly_chart(pareto_co2_figure(), use_container_width=True)
+st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
 st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
             unsafe_allow_html=True)
-st.markdown('<div class="sec-note">青绿柱 = 月度降碳｜金色线 = 全年累计（推算口径，年 173.2 tCO2）</div>',
+st.markdown('<div class="sec-note">青绿柱 = 月度降碳｜金色线 = 全年累计（推算口径，年 173.2 tCO2）；'
+            '考虑设备制造排放 7.2 tCO2e（20 年摊销 0.36 t/年，工程估算），'
+            '全生命周期口径年净降碳约 172.8 tCO2</div>',
             unsafe_allow_html=True)
 st.plotly_chart(lca_figure(), use_container_width=True)
 
@@ -620,16 +701,31 @@ st.markdown('<div class="sec-title"><span class="tag">06</span>敏感性 · λ �
             unsafe_allow_html=True)
 lam_grid = np.linspace(0.0, 1.0, 11)
 if survivors:
-    top1 = []
+    X_lam = build_matrix(survivors, t_src, m_dot, medium, hours, dT)
+    top1, top2, top3, c_top1 = [], [], [], []
     for lam_t in lam_grid:
-        w = combined_weights(float(lam_t))
-        c_t = topsis(np.array([RAW[p] for p in survivors], dtype=float), w)
-        top1.append(survivors[int(np.argmax(c_t))])
-    df_s = pd.DataFrame({"λ": [f"{v:.2f}" for v in lam_grid], "第一名": top1})
+        w = combined_weights(float(lam_t), X_lam)
+        c_t = topsis(X_lam, w)
+        order = np.argsort(-c_t)
+        top1.append(survivors[int(order[0])])
+        top2.append(survivors[int(order[1])] if len(order) > 1 else "—")
+        top3.append(survivors[int(order[2])] if len(order) > 2 else "—")
+        c_top1.append(round(float(c_t[order[0]]), 3))
+    df_s = pd.DataFrame({"λ": [f"{v:.2f}" for v in lam_grid],
+                         "第一名": top1, "第二名": top2, "第三名": top3,
+                         "第一名贴近度": c_top1})
     st.dataframe(style_lambda_table(df_s), use_container_width=True, hide_index=True)
     stable = len(set(top1)) == 1
-    st.success(f"λ 从 0 到 1 全程第一名{'稳定为「' + top1[0] + '」' if stable else '发生变化'}；"
-               f"{'排序对权重设定稳健。' if stable else '提示：排序对 λ 敏感，正式应用需收窄不确定区间。'}")
+    if stable:
+        lo, hi = min(c_top1), max(c_top1)
+        st.success(f"λ∈[0,1] 全程第一名稳定为「{top1[0]}」（贴近度 {lo:.3f}~{hi:.3f}），"
+                   f"首选路径对权重设定稳健；第 2/3 名仍随 λ 变化（见表格），说明权重确有影响。")
+    else:
+        st.success(f"第一名随 λ 变化：{' → '.join(dict.fromkeys(top1))}；"
+                   f"结论对权重敏感，正式应用需收窄 λ 或补充专家打分。")
+    st.caption("说明：本表与上方 TOPSIS 表使用同一决策矩阵（减排列/运行成本按当前参数推算）；"
+               "客观熵权随当前候选矩阵动态计算。第一名稳定不代表排序不变（请看第 2/3 名），"
+               "也不代表结论无风险——应结合贴近度差距判断。")
 else:
     st.warning("无候选路径")
 
@@ -637,8 +733,11 @@ st.divider()
 with st.expander("数据口径与免责声明（答辩必讲）"):
     st.markdown(
         "1. **仿真数据**：DWSIM 9.0.5 稳态仿真 400 工况（真实仿真，能量守恒最大偏差 0.013 kW）；\n"
-        "2. **代理模型**：scikit-learn MLP，测试集 R² = 0.9968 / 0.9925 / 1.0000；pymoo 100 解为代理预测，其中 22 解 + 5 个代表点经 DWSIM 复核（误差 <1%）；\n"
-        "3. **减碳**：ORC 为仿真净功率 × 运行小时 × 华东电网因子 0.581 的**推算口径**，供热为替代天然气估算，均非实测；\n"
+        "2. **代理模型**：scikit-learn MLP，测试集 R² = 0.9968 / 0.9925 / 1.0000（热效率交叉验证 R² 较低，约 0.53，"
+        "模型精度以净功率/吸热量为主）；pymoo 100 解为代理预测，其中 22 个前沿解 + 5 个代表点经 DWSIM 复核"
+        "（净功率误差 <1%，热效率误差 ≤3.2%）；\n"
+        "3. **减碳**：ORC 为仿真净功率 × 运行小时 × 华东电网因子 0.581 的**推算口径**，供热为替代天然气估算，均非实测；"
+        "设备制造排放 7.2 tCO2e 为工程估算（20 年摊销 0.36 t/年），全生命周期口径年净降碳约 172.8 t；\n"
         "4. **成本/回收期**：示意性代理模型，非真实报价；CCER 收益为情景假设，未完成备案方法学前不计入基准财务指标；\n"
         "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源。")
 
