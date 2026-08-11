@@ -427,7 +427,7 @@ def pareto_figure():
         hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>误差 %{text}<extra></extra>"))
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,28,46,.55)", height=440, font=CHART_FONT,
+        plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
         xaxis=dict(gridcolor=GRID, zeroline=False, title="吸热量 Q_in (kW)"),
         yaxis=dict(gridcolor=GRID, zeroline=False, title="净功率 (kW)"),
         legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
@@ -455,7 +455,7 @@ def lca_figure():
         hovertemplate="%{x}月 累计 %{y:.1f} tCO2<extra></extra>"))
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,28,46,.55)", height=420, font=CHART_FONT,
+        plot_bgcolor="rgba(17,28,46,.55)", height=440, font=CHART_FONT,
         bargap=0.32,
         xaxis=dict(gridcolor=GRID, zeroline=False, title="月份"),
         yaxis=dict(gridcolor=GRID, zeroline=False, title="月度降碳 (tCO2)"),
@@ -566,19 +566,17 @@ st.caption("说明：ORC 数字基于 DWSIM 400 工况仿真分布（推算口�
 
 st.divider()
 
-left, right = st.columns([1.35, 1])
-with left:
-    st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">青色点 = 代理预测 100 解｜绿色线 = 22 解 DWSIM 复核｜金星 = 5 个复核点（标注误差）</div>',
-                unsafe_allow_html=True)
-    st.plotly_chart(pareto_figure(), use_container_width=True)
-with right:
-    st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">青绿柱 = 月度降碳｜金色线 = 全年累计（推算口径）</div>',
-                unsafe_allow_html=True)
-    st.plotly_chart(lca_figure(), use_container_width=True)
+st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
+            unsafe_allow_html=True)
+st.markdown('<div class="sec-note">青色点 = 代理预测 100 解｜绿色线 = 22 解 DWSIM 复核｜金星 = 5 个复核点（标注误差）</div>',
+            unsafe_allow_html=True)
+st.plotly_chart(pareto_figure(), use_container_width=True)
+st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
+st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
+            unsafe_allow_html=True)
+st.markdown('<div class="sec-note">青绿柱 = 月度降碳｜金色线 = 全年累计（推算口径，年 173.2 tCO2）</div>',
+            unsafe_allow_html=True)
+st.plotly_chart(lca_figure(), use_container_width=True)
 
 st.divider()
 
