@@ -552,15 +552,21 @@ def pareto_co2_figure():
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=front["cost"], y=front["co2"], mode="markers",
-        marker=dict(size=8, color=front["thermal_eff"],
-                    colorscale="Viridis", opacity=0.85,
+        marker=dict(size=7, color=front["thermal_eff"],
+                    colorscale="Viridis", opacity=0.5,
                     colorbar=dict(title="热效率", thickness=14,
                                   tickfont=dict(color="#94A3B8", size=11))),
-        name="pymoo 100 解（代理预测）",
+        name="pymoo 100 解（代理预测）", showlegend=False,
+        hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
+    pf = real.sort_values("cost")
+    fig.add_trace(go.Scatter(
+        x=pf["cost"], y=pf["co2"], mode="lines",
+        line=dict(color="#FBBF24", width=2, dash="dot"),
+        opacity=0.7, name="DWSIM 复核前沿（22 解）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=real["cost"], y=real["co2"], mode="markers",
-        marker=dict(symbol="star", size=13, color="#FBBF24",
+        marker=dict(symbol="star", size=14, color="#FBBF24",
                     line=dict(color="#0B1220", width=1)),
         name="22 解（DWSIM 真实复核）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<br>净功率 %{customdata[0]:.1f} kW<extra></extra>",
@@ -574,6 +580,14 @@ def pareto_co2_figure():
                    title="年碳减排（tCO2/年，推算口径）"),
         legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
                     font=dict(size=12)),
+        annotations=[dict(
+            x=1.0, y=1.0, xref="paper", yref="paper", xanchor="right",
+            yanchor="top", showarrow=False,
+            text="更优方向：成本 ↓ 且减碳 ↑",
+            font=dict(color="#6EE7B7", size=12),
+            bgcolor="rgba(14,23,41,.75)",
+            bordercolor="rgba(52,211,153,.4)", borderwidth=1,
+            borderpad=6)],
         margin=dict(l=40, r=20, t=30, b=40))
     return fig
 
