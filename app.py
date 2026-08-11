@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""深色科技风预览版（设计稿，供确认后移植到正式版）。"""
+"""工业余热回收智能决策演示平台（正式版 · 深色科技风）。
+
+数据链路：DWSIM 400 工况仿真 → sklearn 代理模型 → pymoo 多目标优化 →
+动态 LCA 核算 → 两级智能决策（规则粗筛 + TOPSIS 精评）。
+数据口径：仿真/推算/示意/公开文献四类，详见《数据来源台账》。
+"""
 import json
 import os
 
@@ -15,33 +20,43 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(DIR, "data")
 
 
-@st.cache_data
-def load_sweep():
-    return pd.read_csv(os.path.join(DATA, "dwsim_sweep_full.csv"), encoding="utf-8-sig")
+def _mtime(fname):
+    """数据文件修改时间：作为缓存键，数据更新后页面自动刷新（无需重启服务）。"""
+    return os.path.getmtime(os.path.join(DATA, fname))
 
 
 @st.cache_data
-def load_front_real():
-    return pd.read_csv(os.path.join(DATA, "pareto_front_real.csv"), encoding="utf-8-sig")
+def load_sweep(_t=None):
+    return pd.read_csv(os.path.join(DATA, "dwsim_sweep_full.csv"),
+                       encoding="utf-8-sig")
 
 
 @st.cache_data
-def load_front_pymoo():
-    return pd.read_csv(os.path.join(DATA, "pymoo_pareto.csv"), encoding="utf-8-sig")
+def load_front_real(_t=None):
+    return pd.read_csv(os.path.join(DATA, "pareto_front_real.csv"),
+                       encoding="utf-8-sig")
 
 
 @st.cache_data
-def load_verify():
-    return pd.read_csv(os.path.join(DATA, "dwsim_verify_pymoo.csv"), encoding="utf-8-sig")
+def load_front_pymoo(_t=None):
+    return pd.read_csv(os.path.join(DATA, "pymoo_pareto.csv"),
+                       encoding="utf-8-sig")
 
 
 @st.cache_data
-def load_lca_monthly():
-    return pd.read_csv(os.path.join(DATA, "lca_monthly_real.csv"), encoding="utf-8-sig")
+def load_verify(_t=None):
+    return pd.read_csv(os.path.join(DATA, "dwsim_verify_pymoo.csv"),
+                       encoding="utf-8-sig")
 
 
 @st.cache_data
-def load_weights():
+def load_lca_monthly(_t=None):
+    return pd.read_csv(os.path.join(DATA, "lca_monthly_real.csv"),
+                       encoding="utf-8-sig")
+
+
+@st.cache_data
+def load_weights(_t=None):
     with open(os.path.join(DATA, "eval_weights.json"), encoding="utf-8") as f:
         return json.load(f)
 
@@ -212,7 +227,9 @@ MAP_TO_TOPSIS = {
 
 def entropy_weights(X):
     """熵权法：基于当前候选矩阵动态计算客观权重（min-max 归一化 + 熵）。
-    零方差列（无区分度）权重为 0，防止除零。"""
+    零方差列（无区分度）权重为 0，防止除零。
+    注意：候选方案 ≤2 时，任意两方案在每列上只构成一个 0/1 区间，
+    熵权会退化（信息量接近），此时 λ 敏感性主要体现主观权重的变化。"""
     n, m = X.shape
     xmin = X.min(axis=0)
     xmax = X.max(axis=0)
@@ -233,7 +250,7 @@ def entropy_weights(X):
 
 
 def combined_weights(lam, X=None):
-    d = load_weights()
+    d = load_weights(_mtime("eval_weights.json"))
     names = d["指标"]
     # 主观部分：AHP 固定权重（演示假设），映射到 TOPSIS 6 指标并归一化
     lookup_sub = dict(zip(names, np.array(d["主观权重_AHP"], dtype=float)))
@@ -361,7 +378,7 @@ def stage1(t_src, demand, continuity, t_steam=152):
 
 
 def orc_reduction(t_src, hours, dT):
-    sweep = load_sweep()
+    sweep = load_sweep(_mtime("dwsim_sweep_full.csv"))
     tmax_k = t_src + 273.15 - dT
     ok = sweep[sweep["heater_outlet_K"] <= tmax_k]
     if len(ok) == 0:
@@ -456,9 +473,9 @@ def style_lambda_table(df):
 
 
 def pareto_figure():
-    front = load_front_pymoo()
-    real = load_front_real().sort_values("Q_in_kW")
-    ver = load_verify()
+    front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
+    real = load_front_real(_mtime("pareto_front_real.csv")).sort_values("Q_in_kW")
+    ver = load_verify(_mtime("dwsim_verify_pymoo.csv"))
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=front["Q_in_kW"], y=front["net_kW"], mode="markers",
@@ -497,8 +514,8 @@ def pareto_figure():
 
 def pareto_co2_figure():
     """碳减排—成本—能效 帕累托散点图（碳减排=净功率×8000h×0.581，推算口径）。"""
-    front = load_front_pymoo()
-    real = load_front_real()
+    front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
+    real = load_front_real(_mtime("pareto_front_real.csv"))
     front = front.assign(co2=front["net_kW"] * 8000.0 / 1000.0 * 0.581,
                          cost=front["cost_proxy"])
     real = real.assign(co2=real["net_kW"] * 8000.0 / 1000.0 * 0.581)
@@ -535,7 +552,7 @@ def pareto_co2_figure():
 
 
 def lca_figure():
-    df = load_lca_monthly()
+    df = load_lca_monthly(_mtime("lca_monthly_real.csv"))
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=df["月份"], y=df["月度降碳tCO2"], name="月度降碳 (tCO2)",
