@@ -186,14 +186,15 @@ PATH_NAMES = [
 INDICATORS = ["能效%", "投资万元/MW", "回收期年", "CO2减排t/年", "政策分"]
 DIRECTIONS = ["max", "min", "min", "max", "max"]
 RAW = {
-    "直接换热供暖":   [90,  60, 2.5, 350, 3],
-    "余热锅炉直接产汽": [85, 100, 3.5, 420, 3],
-    "吸收式热泵提温": [75, 250, 6.5, 480, 4],
-    "压缩式热泵提温": [280, 150, 3.0, 380, 3],
-    "ORC 余热发电":  [12, 220, 8.0, 260, 4],
-    "热化学储热":    [70, 260, 8.5, 300, 3],
-    "相变储热":      [75, 180, 6.0, 280, 3],
-    "TEG 热电发电":  [5, 320, 12.0, 120, 2],
+    # 列含义：[能效%(仿真/文献参考), 投资(示意), 回收期(示意), CO2减排t/年(推算,运行时覆盖), 政策分(示意)]
+    "直接换热供暖":   [90,  60, 2.5, 0, 3],
+    "余热锅炉直接产汽": [85, 100, 3.5, 0, 3],
+    "吸收式热泵提温": [75, 250, 6.5, 0, 4],
+    "压缩式热泵提温": [280, 150, 3.0, 0, 3],
+    "ORC 余热发电":  [12.3, 220, 8.0, 0, 4],
+    "热化学储热":    [70, 260, 8.5, 0, 3],
+    "相变储热":      [75, 180, 6.0, 0, 3],
+    "TEG 热电发电":  [5, 320, 12.0, 0, 2],
 }
 MAP_TO_TOPSIS = {
     "能效%": "系统能效", "投资万元/MW": "初始投资", "回收期年": "投资回收期",
@@ -513,12 +514,29 @@ st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPS
 if survivors:
     w5 = combined_weights(lam)
     X = np.array([RAW[p] for p in survivors], dtype=float)
+    # 减排列按当前参数动态推算（可复算）；无仿真/估算模型的路径显示"—"
+    for i, p in enumerate(survivors):
+        if p == "ORC 余热发电":
+            r = orc_reduction(t_src, hours, dT)
+            if r:
+                X[i, 3] = round(r["co2"], 1)
+        elif p in ("吸收式热泵提温", "压缩式热泵提温", "直接换热供暖",
+                   "余热锅炉直接产汽", "热化学储热", "相变储热"):
+            r = heat_reduction(t_src, m_dot, medium, hours, dT)
+            if r:
+                X[i, 3] = round(r["co2"], 1)
     c = topsis(X, w5)
     df_r = pd.DataFrame({
-        "路径": survivors, "能效%": X[:, 0], "投资万元/MW": X[:, 1],
-        "回收期年": X[:, 2], "CO2减排t/年(演示)": X[:, 3], "政策分": X[:, 4],
+        "路径": survivors,
+        "能效%(仿真/参考)": X[:, 0],
+        "投资(示意)万元/MW": X[:, 1],
+        "回收期(示意)年": X[:, 2],
+        "CO2减排t/年(推算)": X[:, 3],
+        "政策分(示意)": X[:, 4],
         "TOPSIS贴近度": np.round(c, 4),
     }).sort_values("TOPSIS贴近度", ascending=False).reset_index(drop=True)
+    df_r["CO2减排t/年(推算)"] = df_r["CO2减排t/年(推算)"].apply(
+        lambda v: f"{v:.1f}" if v > 0 else "—")
     df_r.insert(0, "排名", range(1, len(df_r) + 1))
     st.dataframe(style_topsis_table(df_r), use_container_width=True,
                  hide_index=True)
@@ -527,7 +545,9 @@ if survivors:
         f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
         f' · 权重来自 AHP+熵权组合赋权</span></div>',
         unsafe_allow_html=True)
-    st.caption("指标为典型演示值，正式应用须替换为文献/实测数据；权重来自 eval_index_system.py 的 AHP+熵权组合赋权。")
+    st.caption("数据口径：能效列中 ORC 为 DWSIM 仿真中位热效率、其余为文献典型参考值；减排列按当前参数推算"
+               "（替代购电/替代天然气），可复算；**投资、回收期、政策分为示意值，无实测依据**，正式应用须以"
+               "文献或实测数据替换；权重为演示权重（AHP 矩阵为演示假设）。")
     csv = df_r.to_csv(index=False, encoding="utf-8-sig")
     st.download_button("下载排序结果 CSV", data=csv,
                        file_name="两级决策_演示结果.csv", mime="text/csv")
