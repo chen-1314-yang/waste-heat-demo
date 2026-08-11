@@ -1,20 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-工业余热回收利用智能决策演示平台
-=================================
-用于"时代杯"答辩现场演示：输入热源温度、流量、用能需求等参数，
-实时输出：路径筛选 → TOPSIS 排序 → 减碳/收益估算 → 帕累托前沿 → 动态 LCA。
-
-数据口径说明（与申报书一致）：
-  - DWSIM 400 工况：真实稳态仿真（dwsim_sweep_full.csv）
-  - 帕累托前沿：22 解真实复核 + pymoo 100 解（代理预测） + 5 个 DWSIM 复核点
-  - 减碳：ORC 用仿真净功率 × 运行小时 × 华东电网因子 0.581（推算口径）
-  - 成本/回收期：示意性代理模型；TOPSIS 指标为典型演示值
-  - 动态 LCA：lca_monthly_real.csv（推算口径，年 173.2 tCO2）
-
-运行：streamlit run app.py
-"""
-
+"""深色科技风预览版（设计稿，供确认后移植到正式版）。"""
 import json
 import os
 
@@ -23,7 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="工业余热回收智能决策演示平台", layout="wide")
+st.set_page_config(page_title="工业余热回收智能决策演示平台", layout="wide",
+                   initial_sidebar_state="expanded")
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(DIR, "data")
@@ -61,20 +47,142 @@ def load_weights():
 
 
 # ---------------------------------------------------------------
-# 路径库（8 条主路径）
+# 深色科技风样式
+# ---------------------------------------------------------------
+st.markdown("""
+<style>
+:root {
+  --bg: #0B1220; --card: #111C2E; --line: rgba(34,211,238,.16);
+  --cyan: #22D3EE; --green: #34D399; --gold: #FBBF24;
+  --text: #E2E8F0; --muted: #94A3B8;
+  --radius-card: 14px; --radius-ctl: 8px;
+}
+html, body, [class*="css"], [data-testid="stAppViewContainer"] * {
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+}
+.stApp {
+  background:
+    radial-gradient(1100px 520px at 18% -8%, rgba(34,211,238,.12), transparent 60%),
+    radial-gradient(900px 460px at 92% 0%, rgba(52,211,153,.09), transparent 55%),
+    var(--bg);
+}
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(13,22,38,.96), rgba(11,18,32,.96));
+  border-right: 1px solid var(--line);
+}
+[data-testid="stSidebar"] hr { border-color: var(--line); }
+.block-container { padding-top: 1.6rem; padding-bottom: 3rem; }
+
+.hero { padding: 6px 0 10px; }
+.hero-title {
+  font-size: 40px; font-weight: 800; letter-spacing: 1px; line-height: 1.2;
+  background: linear-gradient(92deg, #67E8F9 0%, #34D399 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-sub { color: var(--muted); font-size: 15px; margin-top: 2px; }
+.hero-badge {
+  display: inline-block; font-size: 12px; font-weight: 700; color: #06121f;
+  background: linear-gradient(90deg, var(--cyan), var(--green));
+  border-radius: 999px; padding: 3px 12px; margin-right: 8px;
+}
+
+.sec-title {
+  color: var(--text); font-size: 20px; font-weight: 700; margin: 10px 0 2px;
+  display: flex; align-items: center; gap: 10px;
+}
+.sec-title .tag {
+  font-size: 12px; font-weight: 700; color: #06121f;
+  background: linear-gradient(90deg, var(--cyan), var(--green));
+  border-radius: 6px; padding: 2px 9px;
+}
+.sec-note { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+
+.side-sec {
+  color: #7DD3FC; font-size: 12px; font-weight: 700; letter-spacing: 2px;
+  margin: 10px 0 2px; text-transform: uppercase;
+}
+.rec-banner {
+  margin: 8px 0 4px; padding: 12px 16px; border-radius: 12px;
+  border: 1px solid rgba(52,211,153,.45);
+  background: linear-gradient(92deg, rgba(52,211,153,.16), rgba(34,211,238,.10));
+  color: #E2E8F0; font-size: 15px;
+  box-shadow: 0 0 24px rgba(52,211,153,.12);
+}
+.rec-banner b { color: #6EE7B7; font-size: 18px; }
+.rec-banner .muted { color: var(--muted); font-size: 13px; }
+.footer {
+  margin-top: 26px; padding-top: 14px;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 12px;
+  text-align: center; line-height: 1.8;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"] {
+  background: linear-gradient(180deg, rgba(34,211,238,.05), rgba(17,28,46,.72));
+  border: 1px solid var(--line) !important;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+[data-testid="stVerticalBlockBorderWrapper"]:hover { border-color: rgba(34,211,238,.32) !important; }
+
+[data-testid="stMetric"] {
+  background: linear-gradient(180deg, rgba(17,28,46,.92), rgba(11,18,32,.92));
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.22);
+}
+[data-testid="stMetricLabel"] p { color: var(--muted) !important; font-weight: 600; }
+[data-testid="stMetricValue"] { color: var(--cyan) !important; font-weight: 800; }
+[data-testid="stMetricDelta"] { font-weight: 600; }
+[data-testid="stMetricValue"] { font-family: "Fira Code", Consolas, monospace; }
+
+.stButton > button, .stDownloadButton > button {
+  background: linear-gradient(92deg, #0EA5E9, #10B981);
+  color: #06121f; font-weight: 700; border: none; border-radius: 8px;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(34,211,238,.35);
+}
+
+[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+[data-testid="stCaptionContainer"] { color: var(--muted); }
+div[data-testid="stInfo"] {
+  background: rgba(34,211,238,.08); border: 1px solid rgba(34,211,238,.22);
+  color: #A5F3FC; border-radius: 10px;
+}
+div[data-testid="stSuccess"] {
+  background: rgba(52,211,153,.08); border: 1px solid rgba(52,211,153,.25);
+  color: #A7F3D0; border-radius: 10px;
+}
+div[data-testid="stWarning"] {
+  background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25);
+  color: #FDE68A; border-radius: 10px;
+}
+div[data-testid="stExpander"] {
+  background: linear-gradient(180deg, rgba(17,28,46,.75), rgba(11,18,32,.75));
+  border: 1px solid var(--line); border-radius: 12px;
+}
+div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stMetric"] {
+  animation: fadeUp .5s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------
+# 路径库与指标（与正式版一致）
 # ---------------------------------------------------------------
 PATH_NAMES = [
-    "直接换热供暖",
-    "余热锅炉直接产汽",
-    "吸收式热泵提温",
-    "压缩式热泵提温",
-    "ORC 余热发电",
-    "热化学储热",
-    "相变储热",
-    "TEG 热电发电",
+    "直接换热供暖", "余热锅炉直接产汽", "吸收式热泵提温", "压缩式热泵提温",
+    "ORC 余热发电", "热化学储热", "相变储热", "TEG 热电发电",
 ]
-
-# TOPSIS 典型演示指标（行=路径，列=指标；正式应用须替换文献/实测数据）
 INDICATORS = ["能效%", "投资万元/MW", "回收期年", "CO2减排t/年", "政策分"]
 DIRECTIONS = ["max", "min", "min", "max", "max"]
 RAW = {
@@ -87,18 +195,13 @@ RAW = {
     "相变储热":      [80, 150, 4.8, 880, 3],
     "TEG 热电发电":  [5, 220, 9.0, 400, 2],
 }
-
 MAP_TO_TOPSIS = {
-    "能效%": "系统能效",
-    "投资万元/MW": "初始投资",
-    "回收期年": "投资回收期",
-    "CO2减排t/年": "CO2当量减排",
-    "政策分": "政策补贴适配度",
+    "能效%": "系统能效", "投资万元/MW": "初始投资", "回收期年": "投资回收期",
+    "CO2减排t/年": "CO2当量减排", "政策分": "政策补贴适配度",
 }
 
 
 def combined_weights(lam):
-    """按 λ 重组主观/客观权重，并映射到 TOPSIS 5 指标。"""
     d = load_weights()
     names = d["指标"]
     w_sub = np.array(d["主观权重_AHP"], dtype=float)
@@ -125,7 +228,6 @@ def topsis(matrix, weights):
 
 
 def stage1(t_src, demand, continuity, t_steam=152):
-    """第一级：热力学规则粗筛（可解释、可审计）。"""
     keep, reasons = {}, {}
 
     def excl(name, why):
@@ -170,7 +272,7 @@ def stage1(t_src, demand, continuity, t_steam=152):
         for p in ["余热锅炉直接产汽", "ORC 余热发电", "TEG 热电发电",
                   "热化学储热", "相变储热"]:
             excl(p, "需求为供暖/热水：该路径不直接产热")
-    else:  # 储热调峰
+    else:
         keep["热化学储热"] = True
         reasons["热化学储热"] = "储热路径可跨时段调峰"
         keep["相变储热"] = True
@@ -200,7 +302,6 @@ def stage1(t_src, demand, continuity, t_steam=152):
 
 
 def orc_reduction(t_src, hours, dT):
-    """基于 400 工况仿真分布的 ORC 减碳/收益估算（推算口径）。"""
     sweep = load_sweep()
     tmax_k = t_src + 273.15 - dT
     ok = sweep[sweep["heater_outlet_K"] <= tmax_k]
@@ -210,86 +311,189 @@ def orc_reduction(t_src, hours, dT):
     p10, p50, p90 = np.percentile(nets, [10, 50, 90])
     mwh = p50 * hours / 1000.0
     co2 = mwh * 0.581
-    money = mwh * 1000 * 0.65 / 10000.0  # 演示工业电价 0.65 元/kWh -> 万元
-    return {
-        "n_cond": len(ok), "p10": p10, "p50": p50, "p90": p90,
-        "mwh": mwh, "co2": co2, "money": money,
-    }
+    money = mwh * 1000 * 0.65 / 10000.0
+    return {"n_cond": len(ok), "p10": p10, "p50": p50, "p90": p90,
+            "mwh": mwh, "co2": co2, "money": money}
 
 
 def heat_reduction(t_src, m_dot, medium, hours, dT):
-    """供热/产汽路径的演示估算（替代天然气口径，明确为估算）。"""
     cp = {"热水/冷凝水": 4.2, "烟气": 1.1, "工艺液体": 2.5}[medium]
-    t_out = 40.0  # 排放温度假设
+    t_out = 40.0
     dt = max(t_src - t_out - dT, 5.0)
     q_kw = m_dot * cp * dt
     heat_gj = q_kw * hours * 3.6 / 1000.0
-    co2 = heat_gj * 0.0561 / 0.90  # 替代天然气，锅炉效率 90%
-    money = heat_gj * 98.0 / 10000.0  # 天然气 3.5 元/m³，热值 35.6 MJ/m³ -> 万元
+    co2 = heat_gj * 0.0561 / 0.90
+    money = heat_gj * 98.0 / 10000.0
     return {"q_kw": q_kw, "heat_gj": heat_gj, "co2": co2, "money": money}
+
+
+# ---------------------------------------------------------------
+# 深色科技风图表
+# ---------------------------------------------------------------
+CHART_FONT = dict(family="Microsoft YaHei, PingFang SC, sans-serif",
+                  color="#E2E8F0", size=13)
+GRID = "rgba(148,163,184,.13)"
+
+
+def style_stage_table(df):
+    """第一级筛选表：通过=绿、排除=红灰。"""
+    def color_res(v):
+        if v == "✓ 通过":
+            return "background-color: rgba(52,211,153,.20); color: #A7F3D0; font-weight: 700;"
+        return "background-color: rgba(239,68,68,.14); color: #FCA5A5;"
+    return (df.style
+              .map(color_res, subset=["结果"])
+              .set_properties(**{"text-align": "left"})
+              .set_table_styles([{
+                  "selector": "th",
+                  "props": [("background-color", "#16233B"),
+                            ("color", "#7DD3FC"),
+                            ("font-weight", "700"),
+                            ("text-align", "left")]
+              }]))
+
+
+def style_topsis_table(df):
+    """TOPSIS 表：第一名行绿色高亮。"""
+    def row_style(r):
+        if r.name == 0:
+            return ["background-color: rgba(52,211,153,.14); font-weight: 700;"] * len(r)
+        return [""] * len(r)
+    return (df.style
+              .apply(row_style, axis=1)
+              .set_properties(**{"text-align": "left"})
+              .set_table_styles([{
+                  "selector": "th",
+                  "props": [("background-color", "#16233B"),
+                            ("color", "#7DD3FC"),
+                            ("font-weight", "700"),
+                            ("text-align", "left")]
+              }]))
+
+
+PATH_COLORS = {
+    "直接换热供暖": "#22D3EE", "余热锅炉直接产汽": "#38BDF8",
+    "吸收式热泵提温": "#34D399", "压缩式热泵提温": "#2DD4BF",
+    "ORC 余热发电": "#4ADE80", "热化学储热": "#A3E635",
+    "相变储热": "#FBBF24", "TEG 热电发电": "#F472B6",
+}
+
+
+def style_lambda_table(df):
+    """λ 敏感性表：第一名列按路径着色。"""
+    def cell_color(v):
+        c = PATH_COLORS.get(v, "#64748B")
+        return f"background-color: {c}26; color: #E2E8F0; font-weight: 700;"
+    return (df.style
+              .map(cell_color, subset=["第一名"])
+              .set_properties(**{"text-align": "left"})
+              .set_table_styles([{
+                  "selector": "th",
+                  "props": [("background-color", "#16233B"),
+                            ("color", "#7DD3FC"),
+                            ("font-weight", "700"),
+                            ("text-align", "left")]
+              }]))
 
 
 def pareto_figure():
     front = load_front_pymoo()
-    real = load_front_real()
+    real = load_front_real().sort_values("Q_in_kW")
     ver = load_verify()
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=front["Q_in_kW"], y=front["net_kW"], mode="markers",
-        marker=dict(color=front["thermal_eff"], colorscale="Viridis",
-                    size=7, opacity=0.45, colorbar=dict(title="热效率")),
-        name="pymoo 100 解（代理预测）"))
+        marker=dict(size=8, color=front["thermal_eff"],
+                    colorscale=[[0, "#0EA5E9"], [0.5, "#22D3EE"], [1, "#34D399"]],
+                    opacity=0.5, line=dict(width=0, color="#0B1220"),
+                    colorbar=dict(title="热效率", thickness=14,
+                                  tickfont=dict(color="#94A3B8", size=11))),
+        name="pymoo 100 解（代理预测）",
+        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>热效率 %{marker.color:.3f}<extra></extra>"))
     fig.add_trace(go.Scatter(
-        x=real["Q_in_kW"], y=real["net_kW"], mode="markers",
-        marker=dict(color="red", size=9, symbol="circle"),
-        name="22 解（DWSIM 复核）"))
+        x=real["Q_in_kW"], y=real["net_kW"], mode="lines+markers",
+        line=dict(color="#34D399", width=2.5, shape="spline"),
+        marker=dict(size=10, color="#34D399",
+                    line=dict(color="#0B1220", width=1.5)),
+        name="22 解（DWSIM 复核）",
+        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br><extra>22 解复核</extra>"))
     fig.add_trace(go.Scatter(
-        x=ver["dwsim_qin"], y=ver["dwsim_net"], mode="markers",
-        marker=dict(color="gold", size=14, symbol="star",
-                    line=dict(color="black", width=1)),
-        text=[f"误差 {e:.1f}%" for e in ver["net_err_pct"]],
-        name="5 个 DWSIM 复核点"))
+        x=ver["dwsim_qin"], y=ver["dwsim_net"], mode="markers+text",
+        marker=dict(symbol="star", size=16, color="#FBBF24",
+                    line=dict(color="#0B1220", width=1.5)),
+        text=[f"{e:.1f}%" for e in ver["net_err_pct"]],
+        textposition="top center", textfont=dict(color="#FBBF24", size=11),
+        name="5 个 DWSIM 复核点",
+        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>误差 %{text}<extra></extra>"))
     fig.update_layout(
-        height=460, title="帕累托前沿：净功率—吸热量（真实复核 + 代理扩展）",
-        xaxis_title="吸热量 Q_in (kW)", yaxis_title="净功率 (kW)",
-        legend=dict(orientation="h", y=1.12),
-        margin=dict(l=40, r=20, t=60, b=40))
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=440, font=CHART_FONT,
+        xaxis=dict(gridcolor=GRID, zeroline=False, title="吸热量 Q_in (kW)"),
+        yaxis=dict(gridcolor=GRID, zeroline=False, title="净功率 (kW)"),
+        legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=12)),
+        margin=dict(l=40, r=20, t=30, b=40))
     return fig
 
 
 def lca_figure():
     df = load_lca_monthly()
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=df["月份"], y=df["月度降碳tCO2"], name="月度降碳 (tCO2)"))
+    fig.add_trace(go.Bar(
+        x=df["月份"], y=df["月度降碳tCO2"], name="月度降碳 (tCO2)",
+        marker=dict(color=df["月度降碳tCO2"],
+                    colorscale=[[0, "#0EA5E9"], [1, "#34D399"]],
+                    cornerradius=6, line=dict(width=0)),
+        text=df["月度降碳tCO2"].round(1).astype(str),
+        textposition="outside", textfont=dict(color="#94A3B8", size=10),
+        hovertemplate="%{x}月 降碳 %{y:.1f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=df["月份"], y=df["累计降碳tCO2"], mode="lines+markers",
-        name="累计 (tCO2)", line=dict(color="red", width=3)))
+        name="累计 (tCO2)", yaxis="y2",
+        line=dict(color="#FBBF24", width=3),
+        marker=dict(size=7, color="#FBBF24", line=dict(color="#0B1220", width=1)),
+        hovertemplate="%{x}月 累计 %{y:.1f} tCO2<extra></extra>"))
     fig.update_layout(
-        height=360, title="动态 LCA：月度滚动核算（推算口径，年 173.2 tCO2）",
-        xaxis_title="月份", yaxis_title="tCO2",
-        legend=dict(orientation="h", y=1.12),
-        margin=dict(l=40, r=20, t=60, b=40))
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,28,46,.55)", height=420, font=CHART_FONT,
+        bargap=0.32,
+        xaxis=dict(gridcolor=GRID, zeroline=False, title="月份"),
+        yaxis=dict(gridcolor=GRID, zeroline=False, title="月度降碳 (tCO2)"),
+        yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                    zeroline=False, title="累计 (tCO2)",
+                    tickfont=dict(color="#FBBF24")),
+        legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=12)),
+        margin=dict(l=40, r=46, t=30, b=40))
     return fig
 
 
 # ---------------------------------------------------------------
 # 页面
 # ---------------------------------------------------------------
-st.title("工业余热回收利用 · 智能决策演示平台")
-st.caption("《工业废热或余热回收利用降碳技术路径与智能优化评价方法》 ｜ 时代杯零碳科技创新大赛")
+st.markdown(
+    '<div class="hero">'
+    '<span class="hero-badge">时代杯 · 智能控碳</span>'
+    '<span class="hero-badge" style="background:linear-gradient(90deg,#34D399,#FBBF24)">零碳科技</span>'
+    '<div class="hero-title">工业余热回收利用 · 智能决策演示平台</div>'
+    '<div class="hero-sub">《工业废热或余热回收利用降碳技术路径与智能优化评价方法》｜路径筛选 → TOPSIS 排序 → 减碳估算 → 帕累托前沿 → 动态 LCA</div>'
+    '</div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("场景参数")
+    st.markdown('<div style="font-size:17px;font-weight:800;color:#E2E8F0;margin-bottom:4px">场景参数</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="side-sec">热源与需求</div>', unsafe_allow_html=True)
     t_src = st.slider("热源温度 (℃)", 60, 300, 120, 5)
     m_dot = st.slider("热源流量 (kg/s)", 0.5, 5.0, 1.0, 0.1)
     demand = st.selectbox("用能需求", ["发电", "工艺蒸汽", "供暖/热水", "储热调峰"])
     continuity = st.radio("热源连续性", ["连续", "间歇"], horizontal=True)
+    st.markdown('<div class="side-sec">运行与核算假设</div>', unsafe_allow_html=True)
     hours = st.slider("年运行小时 (h)", 4000, 8000, 8000, 500)
     dT = st.slider("换热端差 (℃)", 5, 20, 10, 1)
     medium = st.selectbox("热介质（供热估算用）", ["热水/冷凝水", "烟气", "工艺液体"])
+    st.markdown('<div class="side-sec">评价权重</div>', unsafe_allow_html=True)
     lam = st.slider("组合权重 λ（主观占比）", 0.0, 1.0, 0.5, 0.05)
-
-st.sidebar.caption("λ=主观(AHP)占比；1−λ=客观(熵权)占比")
+    st.caption("λ=主观(AHP)占比；1−λ=客观(熵权)占比")
 
 keep, reasons = stage1(t_src, demand, continuity)
 survivors = [p for p in PATH_NAMES if keep[p]]
@@ -297,33 +501,34 @@ survivors = [p for p in PATH_NAMES if keep[p]]
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("① 第一级：热力学规则粗筛")
-    rows = []
-    for p in PATH_NAMES:
-        rows.append({"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除",
-                     "原因": reasons[p]})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.markdown('<div class="sec-title"><span class="tag">01</span>第一级 · 热力学规则粗筛</div>',
+                unsafe_allow_html=True)
+    rows = [{"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除", "原因": reasons[p]}
+            for p in PATH_NAMES]
+    st.dataframe(style_stage_table(pd.DataFrame(rows)), use_container_width=True,
+                 hide_index=True)
     st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
 
 with col2:
-    st.subheader("② 第二级：TOPSIS 精细排序（组合权重）")
+    st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序</div>',
+                unsafe_allow_html=True)
     if survivors:
         w5 = combined_weights(lam)
         X = np.array([RAW[p] for p in survivors], dtype=float)
         c = topsis(X, w5)
         df_r = pd.DataFrame({
-            "路径": survivors,
-            "能效%": X[:, 0],
-            "投资万元/MW": X[:, 1],
-            "回收期年": X[:, 2],
-            "CO2减排t/年(演示)": X[:, 3],
-            "政策分": X[:, 4],
+            "路径": survivors, "能效%": X[:, 0], "投资万元/MW": X[:, 1],
+            "回收期年": X[:, 2], "CO2减排t/年(演示)": X[:, 3], "政策分": X[:, 4],
             "TOPSIS贴近度": np.round(c, 4),
         }).sort_values("TOPSIS贴近度", ascending=False).reset_index(drop=True)
         df_r.insert(0, "排名", range(1, len(df_r) + 1))
-        st.dataframe(df_r, use_container_width=True, hide_index=True)
+        st.dataframe(style_topsis_table(df_r), use_container_width=True,
+                     hide_index=True)
         st.markdown(
-            f"**推荐路径：{df_r.iloc[0]['路径']}**（贴近度 {df_r.iloc[0]['TOPSIS贴近度']:.3f}，λ={lam:.2f}）")
+            f'<div class="rec-banner">推荐路径：<b>{df_r.iloc[0]["路径"]}</b>'
+            f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
+            f' · 权重来自 AHP+熵权组合赋权</span></div>',
+            unsafe_allow_html=True)
         st.caption("指标为典型演示值，正式应用须替换为文献/实测数据；权重来自 eval_index_system.py 的 AHP+熵权组合赋权。")
         csv = df_r.to_csv(index=False, encoding="utf-8-sig")
         st.download_button("下载排序结果 CSV", data=csv,
@@ -333,7 +538,8 @@ with col2:
 
 st.divider()
 
-st.subheader("③ 减碳与收益估算（推算口径，非实测）")
+st.markdown('<div class="sec-title"><span class="tag">03</span>减碳与收益估算（推算口径，非实测）</div>',
+            unsafe_allow_html=True)
 orc = orc_reduction(t_src, hours, dT) if demand in ("发电", "储热调峰") else None
 heat = heat_reduction(t_src, m_dot, medium, hours, dT) if demand in (
     "工艺蒸汽", "供暖/热水", "储热调峰") else None
@@ -348,14 +554,11 @@ if orc is not None:
     c4.metric("年节省电费（演示价 0.65 元/kWh）", f"{orc['money']:.1f} 万元",
               "按替代购电口径")
 elif heat is not None:
-    c1.metric("回收热功率（估算）", f"{heat['q_kw']:.0f} kW",
-              f"ṁ={m_dot} kg/s × cp×ΔT")
-    c2.metric("年回收热量", f"{heat['heat_gj']:.0f} GJ",
-              f"{hours} h/年")
+    c1.metric("回收热功率（估算）", f"{heat['q_kw']:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
+    c2.metric("年回收热量", f"{heat['heat_gj']:.0f} GJ", f"{hours} h/年")
     c3.metric("年降碳（替代天然气，估算）", f"{heat['co2']:.1f} tCO2",
               "0.0561 t/GJ ÷ 锅炉效率90%")
-    c4.metric("年节省燃气费（演示价）", f"{heat['money']:.1f} 万元",
-              "3.5 元/m³ 折算")
+    c4.metric("年节省燃气费（演示价）", f"{heat['money']:.1f} 万元", "3.5 元/m³ 折算")
 else:
     for cc in (c1, c2, c3, c4):
         cc.metric("—", "—", "无可用估算")
@@ -363,16 +566,24 @@ st.caption("说明：ORC 数字基于 DWSIM 400 工况仿真分布（推算口�
 
 st.divider()
 
-left, right = st.columns([1.4, 1])
+left, right = st.columns([1.35, 1])
 with left:
-    st.subheader("④ 帕累托前沿（多目标优化结果）")
+    st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">青色点 = 代理预测 100 解｜绿色线 = 22 解 DWSIM 复核｜金星 = 5 个复核点（标注误差）</div>',
+                unsafe_allow_html=True)
     st.plotly_chart(pareto_figure(), use_container_width=True)
 with right:
-    st.subheader("⑤ 动态 LCA 月度滚动核算")
+    st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">青绿柱 = 月度降碳｜金色线 = 全年累计（推算口径）</div>',
+                unsafe_allow_html=True)
     st.plotly_chart(lca_figure(), use_container_width=True)
 
 st.divider()
-st.subheader("⑥ 敏感性：λ 变化对排序的影响")
+
+st.markdown('<div class="sec-title"><span class="tag">06</span>敏感性 · λ 对排序的影响</div>',
+            unsafe_allow_html=True)
 lam_grid = np.linspace(0.0, 1.0, 11)
 if survivors:
     top1 = []
@@ -381,7 +592,7 @@ if survivors:
         c_t = topsis(np.array([RAW[p] for p in survivors], dtype=float), w)
         top1.append(survivors[int(np.argmax(c_t))])
     df_s = pd.DataFrame({"λ": [f"{v:.2f}" for v in lam_grid], "第一名": top1})
-    st.dataframe(df_s, use_container_width=True, hide_index=True)
+    st.dataframe(style_lambda_table(df_s), use_container_width=True, hide_index=True)
     stable = len(set(top1)) == 1
     st.success(f"λ 从 0 到 1 全程第一名{'稳定为「' + top1[0] + '」' if stable else '发生变化'}；"
                f"{'排序对权重设定稳健。' if stable else '提示：排序对 λ 敏感，正式应用需收窄不确定区间。'}")
@@ -396,3 +607,10 @@ with st.expander("数据口径与免责声明（答辩必讲）"):
         "3. **减碳**：ORC 为仿真净功率 × 运行小时 × 华东电网因子 0.581 的**推算口径**，供热为替代天然气估算，均非实测；\n"
         "4. **成本/回收期**：示意性代理模型，非真实报价；CCER 收益为情景假设，未完成备案方法学前不计入基准财务指标；\n"
         "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源。")
+
+st.markdown(
+    '<div class="footer">'
+    '《工业废热或余热回收利用降碳技术路径与智能优化评价方法》· 时代杯零碳科技创新大赛 · '
+    'DWSIM 仿真 + 机器学习 + 多目标优化 + 动态 LCA + 两级决策<br>'
+    '数据口径：仿真/推算数据，非实测；成本为示意代理；CCER 为情景假设'
+    '</div>', unsafe_allow_html=True)
