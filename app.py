@@ -384,8 +384,9 @@ def stage1(t_src, demand, continuity, t_steam=152):
         reasons["吸收式热泵提温"] = "提温需求候选" if t_src >= 90 else "驱动热源不足"
         keep["压缩式热泵提温"] = True
         reasons["压缩式热泵提温"] = "提温需求候选"
-        keep["ORC 余热发电"] = t_src >= 110
-        reasons["ORC 余热发电"] = "发电调峰候选" if t_src >= 110 else "驱动温度不足"
+        keep["ORC 余热发电"] = 110 <= t_src <= 350
+        reasons["ORC 余热发电"] = ("发电调峰候选" if 110 <= t_src <= 350
+                                   else "超出 ORC 适用区间（110~350℃）")
         keep["高温蒸汽发电"] = t_src >= 250
         reasons["高温蒸汽发电"] = "发电调峰候选" if t_src >= 250 else "驱动温度不足"
         keep["TEG 热电发电"] = t_src >= 40
@@ -499,7 +500,8 @@ def style_topsis_table(df):
 PATH_COLORS = {
     "直接换热供暖": "#22D3EE", "余热锅炉直接产汽": "#38BDF8",
     "吸收式热泵提温": "#34D399", "压缩式热泵提温": "#2DD4BF",
-    "ORC 余热发电": "#4ADE80", "热化学储热": "#A3E635",
+    "ORC 余热发电": "#4ADE80", "高温蒸汽发电": "#FB923C",
+    "热化学储热": "#A3E635",
     "相变储热": "#FBBF24", "TEG 热电发电": "#F472B6",
 }
 
