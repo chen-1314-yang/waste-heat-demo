@@ -93,6 +93,62 @@ def load_conditions():
     return df
 
 
+COND_COLUMNS = [
+    "工况名称", "行业", "热源类型", "热源温度_℃", "热源流量_kg_s",
+    "波动模式", "波动幅度_℃", "波动速率", "年运行小时", "用能需求",
+    "热源连续性", "数据来源", "说明",
+]
+
+COND_LIMITS = {
+    "热源温度_℃": (40.0, 900.0),
+    "热源流量_kg_s": (0.1, 200.0),
+    "波动幅度_℃": (5.0, 150.0),
+    "波动速率": (0.5, 3.0),
+    "年运行小时": (4000, 8000),
+}
+
+
+def empty_conditions_template():
+    return pd.DataFrame(
+        [{c: ("" if c not in COND_LIMITS else 100.0) for c in COND_COLUMNS}])
+
+
+def validate_conditions(df):
+    """返回错误列表；空列表表示可以保存。"""
+    errors = []
+    if df is None or df.empty:
+        return ["工况库不能为空，至少保留一行。"]
+    missing = [c for c in COND_COLUMNS if c not in df.columns]
+    if missing:
+        return [f"缺少列：{', '.join(missing)}"]
+    names = df["工况名称"].astype(str).str.strip()
+    if names.isna().any() or (names == "").any() or (names == "nan").any():
+        errors.append("存在空的“工况名称”。")
+    if df["工况名称"].duplicated().any():
+        dup = df.loc[df["工况名称"].duplicated(), "工况名称"].tolist()
+        errors.append(f"“工况名称”重复：{', '.join(map(str, dup[:3]))}")
+    for col, allowed in [("波动模式", FLOW_PROFILES),
+                         ("用能需求", DEMAND_OPTIONS),
+                         ("热源连续性", ["连续", "间歇"])]:
+        bad = ~df[col].astype(str).isin(allowed)
+        if bad.any():
+            rows = df.index[bad].tolist()[:5]
+            errors.append(f"“{col}”必须是 {allowed}，错误行：{rows}")
+    for col, (lo, hi) in COND_LIMITS.items():
+        num = pd.to_numeric(df[col], errors="coerce")
+        bad = num.isna() | (num < lo) | (num > hi)
+        if bad.any():
+            rows = df.index[bad].tolist()[:5]
+            errors.append(f"“{col}”需为 {lo}~{hi} 的数值，错误行：{rows}")
+    return errors
+
+
+def save_conditions(df):
+    path = os.path.join(DATA, "conditions_db.csv")
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+
+
 # ---------------------------------------------------------------
 # 深色科技风样式
 # ---------------------------------------------------------------
@@ -854,6 +910,65 @@ with st.sidebar:
     st.markdown('<div class="side-sec">评价权重</div>', unsafe_allow_html=True)
     lam = st.slider("组合权重 λ（主观占比）", 0.0, 1.0, 0.5, 0.05)
     st.caption("λ=主观(AHP)占比；1−λ=客观(熵权)占比")
+
+    st.markdown('<div class="side-sec">工况库管理</div>', unsafe_allow_html=True)
+    st.session_state.setdefault("_cond_default", conditions.copy())
+    with st.expander("在线编辑工况库（实时/典型工况数据源）", expanded=False):
+        st.caption(
+            "增删改行后点“保存”。本地运行保存到 data/conditions_db.csv；"
+            "部署版（Streamlit Cloud）服务器为临时环境，保存只对当前会话生效，"
+            "长期修改请用下方“下载 CSV”后上传到 GitHub 仓库 data/ 目录。")
+        editor_df = conditions.copy() if not conditions.empty else empty_conditions_template()
+        edited = st.data_editor(
+            editor_df, num_rows="dynamic", hide_index=True, width="stretch",
+            key="cond_editor",
+            column_config={
+                "热源温度_℃": st.column_config.NumberColumn(
+                    "热源温度_℃", min_value=40.0, max_value=900.0, step=5.0),
+                "热源流量_kg_s": st.column_config.NumberColumn(
+                    "热源流量_kg_s", min_value=0.1, max_value=200.0, step=1.0),
+                "波动幅度_℃": st.column_config.NumberColumn(
+                    "波动幅度_℃", min_value=5.0, max_value=150.0, step=5.0),
+                "波动速率": st.column_config.NumberColumn(
+                    "波动速率", min_value=0.5, max_value=3.0, step=0.1),
+                "年运行小时": st.column_config.NumberColumn(
+                    "年运行小时", min_value=4000, max_value=8000, step=500),
+            })
+        b1, b2 = st.columns(2)
+        if b1.button("保存修改", type="primary"):
+            errs = validate_conditions(edited)
+            if errs:
+                st.error("无法保存：\n" + "\n".join(errs))
+            else:
+                try:
+                    path = save_conditions(edited)
+                    st.session_state["_cond_default"] = edited.copy()
+                    st.success(f"已保存 {len(edited)} 行 → {os.path.basename(path)}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"保存失败：{exc}")
+        if b2.button("恢复初始库"):
+            default = st.session_state.get("_cond_default")
+            if default is not None and not default.empty:
+                save_conditions(default)
+                st.rerun()
+        st.download_button(
+            "下载当前 CSV",
+            data=edited.to_csv(index=False).encode("utf-8-sig"),
+            file_name="conditions_db.csv", mime="text/csv")
+        up = st.file_uploader("上传 CSV 替换工况库（.csv）", type=["csv"])
+        if up is not None:
+            try:
+                up_df = pd.read_csv(up, encoding="utf-8-sig").fillna("")
+                errs = validate_conditions(up_df)
+                if errs:
+                    st.error("上传文件不合法：\n" + "\n".join(errs))
+                else:
+                    save_conditions(up_df)
+                    st.success(f"已应用上传的工况库（{len(up_df)} 行）")
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"读取上传文件失败：{exc}")
 
 
 def render_dashboard():
