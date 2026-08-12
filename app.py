@@ -74,6 +74,25 @@ def load_weights(_t=None):
         return json.load(f)
 
 
+DEMAND_OPTIONS = ["发电", "工艺蒸汽", "供暖/热水", "储热调峰"]
+FLOW_PROFILES = ["平稳波动", "班次阶跃", "随机游走"]
+
+
+def load_conditions():
+    """工况库（data/conditions_db.csv，可用 WPS/Excel 编辑）。
+
+    每次读取（文件很小），编辑保存后刷新页面即可生效。
+    字段约定见 README_使用说明.md；未知值回退到安全默认。
+    """
+    path = os.path.join(DATA, "conditions_db.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig").fillna("")
+    if df.empty or "工况名称" not in df.columns:
+        return pd.DataFrame()
+    return df
+
+
 # ---------------------------------------------------------------
 # 深色科技风样式
 # ---------------------------------------------------------------
@@ -738,31 +757,74 @@ with st.sidebar:
                 unsafe_allow_html=True)
     st.markdown('<div class="side-sec">热源与需求</div>', unsafe_allow_html=True)
     data_mode = st.radio("数据输入方式", ["手动设定", "典型工况", "实时模拟"])
+    conditions = load_conditions()
     if data_mode == "手动设定":
         t_src = st.number_input("热源温度 (℃)", 40.0, 900.0, 120.0, 5.0)
         m_dot = st.number_input("热源流量 (kg/s)", 0.1, 200.0, 50.0, 0.5)
     elif data_mode == "典型工况":
-        presets = {
-            "钢铁-高炉烟气": (350.0, 60.0),
-            "钢铁-高炉渣": (900.0, 20.0),
-            "水泥-窑尾废气": (350.0, 60.0),
-            "玻璃-池窑烟气": (450.0, 40.0),
-            "化工-反应器余热": (250.0, 80.0),
-            "有色-冶炼烟气": (700.0, 30.0),
-            "热电-燃气轮机排气": (450.0, 90.0),
-        }
-        preset = st.selectbox("典型工况", list(presets))
-        t_src, m_dot = presets[preset]
-        st.caption(f"典型工况：热源 {t_src:.0f}℃、流量 {m_dot:.0f} kg/s（文献/工程示例）")
+        if conditions.empty:
+            st.error("工况库 data/conditions_db.csv 缺失或格式错误，请检查 data/ 目录")
+            t_src, m_dot = 120.0, 50.0
+        else:
+            preset = st.selectbox("典型工况", conditions["工况名称"].tolist())
+            row = conditions[conditions["工况名称"] == preset].iloc[0]
+            t_src = float(row["热源温度_℃"])
+            m_dot = float(row["热源流量_kg_s"])
+            st.caption(
+                f"{row['行业']} · {row['热源类型']} · 来源：{row['数据来源']}"
+                + (f" · {row['说明']}" if row["说明"] else ""))
     else:
         st.session_state.setdefault(
             "rt", {"t": 300.0, "m": 50.0, "hist": [], "n": 0, "base": 300.0})
+        if conditions.empty:
+            st.error("工况库 data/conditions_db.csv 缺失或格式错误，请检查 data/ 目录")
+        else:
+            cond_names = conditions["工况名称"].tolist()
+            cond_name = st.selectbox("工况库条目（实时模拟）", cond_names,
+                                     key="rt_cond")
+            row = conditions[conditions["工况名称"] == cond_name].iloc[0]
+            if st.session_state.get("rt_cond_applied") != cond_name:
+                base_t = float(row["热源温度_℃"])
+                st.session_state["rt"] = {
+                    "t": base_t, "m": float(row["热源流量_kg_s"]),
+                    "hist": [], "n": 0, "base": base_t}
+                st.session_state["rt_cond_applied"] = cond_name
+                profile = str(row["波动模式"])
+                st.session_state["rt_profile"] = (
+                    profile if profile in FLOW_PROFILES else "平稳波动")
+                st.session_state["rt_amp"] = float(row["波动幅度_℃"])
+                st.session_state["rt_speed"] = float(row["波动速率"])
+                demand = str(row["用能需求"])
+                if demand in DEMAND_OPTIONS:
+                    st.session_state["demand_val"] = demand
+                continuity = str(row["热源连续性"])
+                if continuity in ["连续", "间歇"]:
+                    st.session_state["continuity_val"] = continuity
+                try:
+                    h = int(float(row["年运行小时"]))
+                    if 4000 <= h <= 8000:
+                        st.session_state["hours_val"] = h
+                except (TypeError, ValueError):
+                    pass
+            st.caption(
+                f"{row['行业']} · {row['热源类型']} · 来源：{row['数据来源']}"
+                + (f" · {row['说明']}" if row["说明"] else ""))
+            with st.expander("工况库（可编辑 data/conditions_db.csv）"):
+                st.dataframe(
+                    conditions[["工况名称", "行业", "热源类型", "热源温度_℃",
+                                "热源流量_kg_s", "用能需求", "热源连续性",
+                                "数据来源"]],
+                    width="stretch", hide_index=True)
+        _prof = st.session_state.get("rt_profile", "平稳波动")
+        _prof = _prof if _prof in FLOW_PROFILES else "平稳波动"
         st.session_state["rt_profile"] = st.selectbox(
-            "波动模式", ["平稳波动", "班次阶跃", "随机游走"])
+            "波动模式", FLOW_PROFILES, index=FLOW_PROFILES.index(_prof))
         st.session_state["rt_amp"] = st.slider(
-            "波动幅度 (℃)", 5.0, 150.0, 30.0, 5.0)
+            "波动幅度 (℃)", 5.0, 150.0,
+            float(st.session_state.get("rt_amp", 30.0)), 5.0)
         st.session_state["rt_speed"] = st.slider(
-            "波动速率", 0.5, 3.0, 1.0, 0.5)
+            "波动速率", 0.5, 3.0,
+            float(st.session_state.get("rt_speed", 1.0)), 0.5)
         st.session_state["rt_paused"] = st.toggle(
             "暂停实时数据", value=st.session_state.get("rt_paused", False))
 
@@ -782,10 +844,11 @@ with st.sidebar:
         _rt_panel()
         t_src = st.session_state["rt"]["t"]
         m_dot = st.session_state["rt"]["m"]
-    demand = st.selectbox("用能需求", ["发电", "工艺蒸汽", "供暖/热水", "储热调峰"])
-    continuity = st.radio("热源连续性", ["连续", "间歇"], horizontal=True)
+    demand = st.selectbox("用能需求", DEMAND_OPTIONS, key="demand_val")
+    continuity = st.radio("热源连续性", ["连续", "间歇"], horizontal=True,
+                          key="continuity_val")
     st.markdown('<div class="side-sec">运行与核算假设</div>', unsafe_allow_html=True)
-    hours = st.slider("年运行小时 (h)", 4000, 8000, 8000, 500)
+    hours = st.slider("年运行小时 (h)", 4000, 8000, 8000, 500, key="hours_val")
     dT = st.slider("换热端差 (℃)", 5, 20, 10, 1)
     medium = st.selectbox("热介质（供热估算用）", ["热水/冷凝水", "烟气", "工艺液体"])
     st.markdown('<div class="side-sec">评价权重</div>', unsafe_allow_html=True)
@@ -804,7 +867,7 @@ def render_dashboard():
                 unsafe_allow_html=True)
     rows = [{"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除", "原因": reasons[p]}
             for p in PATH_NAMES]
-    st.dataframe(style_stage_table(pd.DataFrame(rows)), use_container_width=True,
+    st.dataframe(style_stage_table(pd.DataFrame(rows)), width="stretch",
                  hide_index=True)
     st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
 
@@ -829,7 +892,7 @@ def render_dashboard():
         df_r["CO2减排t/年(推算)"] = df_r["CO2减排t/年(推算)"].apply(
             lambda v: f"{v:.1f}" if v > 0 else "—")
         df_r.insert(0, "排名", range(1, len(df_r) + 1))
-        st.dataframe(style_topsis_table(df_r), use_container_width=True,
+        st.dataframe(style_topsis_table(df_r), width="stretch",
                      hide_index=True)
         st.markdown(
             f'<div class="rec-banner">推荐路径：<b>{df_r.iloc[0]["路径"]}</b>'
@@ -896,15 +959,15 @@ def render_dashboard():
                 unsafe_allow_html=True)
     st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 16 解 CoolProp 复核前沿｜金星 = 5 个 DWSIM 复核点（旧版存档）</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(pareto_figure(), use_container_width=True)
+    st.plotly_chart(pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-note">碳减排—成本权衡：蓝线 = 16 个 CoolProp 复核前沿解（互不支配）；金星 = 最优点；净功率按每 MW 回收热口径，碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(pareto_co2_figure(), use_container_width=True)
+    st.plotly_chart(pareto_co2_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核）</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(steam_pareto_figure(), use_container_width=True)
+    st.plotly_chart(steam_pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
                 unsafe_allow_html=True)
@@ -912,7 +975,7 @@ def render_dashboard():
                 '考虑设备制造排放 15.0 tCO2e（20 年摊销 0.75 t/年，工程估算），'
                 '全生命周期口径年净降碳约 572.4 tCO2</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(lca_figure(), use_container_width=True)
+    st.plotly_chart(lca_figure(), width="stretch")
 
     st.divider()
 
@@ -938,9 +1001,9 @@ def render_dashboard():
                              "第一名": top1, "第二名": top2, "第三名": top3,
                              "榜首贴近度 C(λ)": c_top1,
                              "ΔC vs λ=0": delta})
-        st.dataframe(style_lambda_table(df_s), use_container_width=True, hide_index=True)
+        st.dataframe(style_lambda_table(df_s), width="stretch", hide_index=True)
         # 贴近度-λ 曲线：权重对每个候选的影响一目了然
-        st.plotly_chart(lambda_figure(survivors, X_lam), use_container_width=True)
+        st.plotly_chart(lambda_figure(survivors, X_lam), width="stretch")
         # 排序快照：λ=0 / 0.5 / 1 的完整排序（含贴近度）
         snap = []
         for lam_t in (0.0, 0.5, 1.0):

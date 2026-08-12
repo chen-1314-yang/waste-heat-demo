@@ -9,18 +9,22 @@
 1. 第一级热力学规则粗筛（8 条技术路径，给出排除/通过原因）；
 2. 第二级 TOPSIS 精细排序（AHP + 熵权组合权重，λ 可调）；
 3. 减碳与收益估算（ORC 发电 / 供热替代天然气）；
-4. 帕累托前沿（22 解 DWSIM 复核 + pymoo 100 解 + 5 个复核点）；
-5. 动态 LCA 月度滚动核算（年 173.2 tCO2，推算口径）；
-6. λ 敏感性分析（排序稳定性）。
+4. 帕累托前沿（ORC 16 解精确模型复核 + pymoo 100 解 + 蒸汽朗肯 100 解）；
+5. 动态 LCA 月度滚动核算（年降碳 573.1 tCO2，推算口径）；
+6. λ 敏感性分析（排序稳定性）；
+7. 工况库驱动的实时模拟（`data/conditions_db.csv` 可编辑，模拟 DCS 波动数据）。
 
 ## 数据口径（务必阅读）
 
-- **DWSIM 400 工况**：真实稳态仿真（能量守恒最大偏差 0.013 kW）；
-- **帕累托前沿**：22 解经 DWSIM 复核；pymoo 100 解为代理模型预测；5 个代表点经 DWSIM 复核（误差 <1%）；
+- **CoolProp 物性仿真**：ORC 1675 工况 + 蒸汽朗肯 1600 工况（能量守恒最大偏差 <1e-9 kW）；
+- **帕累托前沿**：ORC 16 解经精确朗肯模型重算生成（102~151 kW/MW热）；pymoo 100 解为代理模型预测；
+  5 个代表点复核（每 MW 回收热口径：ORC 净功率误差 0.03%~1.13%、热效率 0.43%~2.27%；
+  蒸汽朗肯净功率误差 0.21%~1.41%、热效率 0.01%~0.45%；最优点 0.4%）；
+- **工况库**：`data/conditions_db.csv` 为工程/文献示例（示意），可编辑；3 个对标案例有公开出处；
 - **ORC 减碳**：仿真净功率 × 运行小时 × 华东电网因子 0.581，**推算口径，非实测**；
 - **供热减碳**：替代天然气估算（0.0561 tCO2/GJ ÷ 锅炉效率 90%），演示估算；
 - **电价 0.65 元/kWh、气价 3.5 元/m³**：演示单价假设；
-- **TOPSIS 指标**：典型演示值，正式应用须替换文献/实测数据；
+- **TOPSIS 指标**：文献/工程估算/示意三类，页面与《数据来源台账》逐项标注；
 - **成本/回收期**：示意性代理模型，非真实报价；**CCER 收益为情景假设**，未完成备案方法学前不计入基准财务指标。
 
 ## 本地运行
@@ -49,10 +53,13 @@ waste-heat-demo/
 ├── README.md               # 本说明
 ├── .streamlit/config.toml  # 免邮箱提示 / headless
 └── data/                   # 演示数据（可复算）
-    ├── dwsim_sweep_full.csv   # DWSIM 400 工况
-    ├── pareto_front_real.csv  # 22 解复核前沿
-    ├── pymoo_pareto.csv       # pymoo 100 解
-    ├── dwsim_verify_pymoo.csv # 5 个 DWSIM 复核点
-    ├── lca_monthly_real.csv   # 动态 LCA 月度（推算）
-    └── eval_weights.json      # AHP+熵权组合权重
+    ├── conditions_db.csv       # 工况库（可编辑：实时模拟/典型工况的数据源）
+    ├── orc_sweep_coolprop.csv  # ORC 1675 工况（CoolProp）
+    ├── steam_sweep_coolprop.csv # 蒸汽朗肯 1600 工况（CoolProp）
+    ├── pareto_front_real.csv   # ORC 16 解复核前沿
+    ├── steam_pareto.csv        # 蒸汽朗肯前沿
+    ├── pymoo_pareto.csv        # pymoo 100 解
+    ├── orc_surrogate.joblib / steam_surrogate.joblib  # 代理模型
+    ├── lca_monthly_real.csv / lca_mc_annual_real.csv / lca_embodied.json  # 动态 LCA（推算）
+    └── eval_weights.json       # AHP+熵权组合权重
 ```
