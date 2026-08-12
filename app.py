@@ -906,9 +906,9 @@ def render_dashboard():
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-title"><span class="tag">05</span>动态 LCA · 月度滚动核算</div>',
                 unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">蓝绿柱 = 月度降碳｜金线 = 全年累计（推算口径，年 173.2 tCO2）；'
-                '考虑设备制造排放 7.2 tCO2e（20 年摊销 0.36 t/年，工程估算），'
-                '全生命周期口径年净降碳约 172.8 tCO2</div>',
+    st.markdown('<div class="sec-note">蓝绿柱 = 月度降碳｜金线 = 全年累计（推算口径，年 573.1 tCO2）；'
+                '考虑设备制造排放 15.0 tCO2e（20 年摊销 0.75 t/年，工程估算），'
+                '全生命周期口径年净降碳约 572.4 tCO2</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(lca_figure(), use_container_width=True)
 
@@ -975,7 +975,7 @@ def render_dashboard():
             "pymoo 各 100 解为代理预测，ORC 前沿 16 解 + 蒸汽前沿 100 解经精确朗肯模型复核；\n"
             "3. **减碳**：ORC/蒸汽发电为物性模型热效率 × 每 MW 回收热净功率 × 运行小时 × 华东电网因子 0.581 的"
             "**推算口径**，供热为替代天然气估算，均非实测；"
-            "设备制造排放 7.2 tCO2e 为工程估算（20 年摊销 0.36 t/年），全生命周期口径年净降碳约 172.8 t；\n"
+            "设备制造排放 15.0 tCO2e 为工程估算（20 年摊销 0.75 t/年），全生命周期口径年净降碳约 572.4 t；\n"
             "4. **成本/回收期**：示意性代理模型，非真实报价；CCER 收益为情景假设，未完成备案方法学前不计入基准财务指标；\n"
             "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源。")
 
