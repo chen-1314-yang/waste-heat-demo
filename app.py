@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """工业余热回收智能决策演示平台（正式版 · 深色科技风）。
 
-数据链路：CoolProp 物性仿真（ORC 1675 工况 + 蒸汽朗肯 1600 工况）→
+数据链路：CoolProp 物性仿真（ORC 5925 工况 + 蒸汽朗肯 1600 工况）→
 sklearn 代理模型 → pymoo 多目标优化 → 动态 LCA 核算 → 两级智能决策。
 数据口径：仿真/推算/示意/公开文献四类，详见《数据来源台账》。
 """
@@ -20,6 +20,12 @@ st.set_page_config(page_title="工业余热回收智能决策演示平台", layo
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(DIR, "data")
 
+# 排放因子口径（2021年度全国电网平均排放因子，生态环境部 2022-03 发布，
+# 环办气候函〔2022〕111号；0.5810 不是华东区域因子，勿误标）
+GRID_EF = 0.581          # tCO2/MWh
+GRID_EF_LABEL = "2021年度全国电网平均排放因子 0.5810（生态环境部 2022-03 发布）"
+HP_COP = 2.8             # 压缩式热泵演示 COP
+
 
 def _mtime(fname):
     """数据文件修改时间：作为缓存键，数据更新后页面自动刷新（无需重启服务）。"""
@@ -28,7 +34,10 @@ def _mtime(fname):
 
 @st.cache_data
 def load_sweep(_t=None):
-    return pd.read_csv(os.path.join(DATA, "dwsim_sweep_full.csv"),
+    # 2026-08-13 审计 H5：网站统一读 orc_sweep_coolprop.csv
+    # （原 data 目录 dwsim_sweep_full.csv 是 CoolProp 扫描换名，已归档至 data/_archived/；
+    #  400 行旧 DWSIM 存档已改名 dwsim_sweep_400_deprecated.csv）
+    return pd.read_csv(os.path.join(DATA, "orc_sweep_coolprop.csv"),
                        encoding="utf-8-sig")
 
 
@@ -41,6 +50,18 @@ def load_front_real(_t=None):
 @st.cache_data
 def load_front_pymoo(_t=None):
     return pd.read_csv(os.path.join(DATA, "pymoo_pareto.csv"),
+                       encoding="utf-8-sig")
+
+
+@st.cache_data
+def load_front_orc_verified(_t=None):
+    return pd.read_csv(os.path.join(DATA, "front_orc_verified.csv"),
+                       encoding="utf-8-sig")
+
+
+@st.cache_data
+def load_front_steam_verified(_t=None):
+    return pd.read_csv(os.path.join(DATA, "front_steam_verified.csv"),
                        encoding="utf-8-sig")
 
 
@@ -432,16 +453,19 @@ def build_matrix(survivors, t_src, m_dot, medium, hours, dT):
     X = np.array([RAW[p] for p in survivors], dtype=float)
     for i, p in enumerate(survivors):
         if p == "ORC 余热发电":
-            r = orc_reduction(t_src, hours, dT)
+            r = orc_reduction(t_src, m_dot, medium, hours, dT)
             if r:
                 X[i, 3] = round(r["co2"], 1)
         elif p == "高温蒸汽发电":
-            r = steam_reduction(t_src, hours, dT)
+            r = steam_reduction(t_src, m_dot, medium, hours, dT)
             if r:
                 X[i, 3] = round(r["co2"], 1)
         elif p == "压缩式热泵提温":
             # 运行成本随当前运行小时联动：0.357 MW电/MW热 × hours × 0.65 元/kWh
-            X[i, 3] = round(heat_reduction(t_src, m_dot, medium, hours, dT)["co2"], 1)
+            # 减排列必须扣除压缩式热泵自身耗电排放（COP 2.8 × 电网因子），
+            # 不能与直接换热/吸收式共用"替代天然气"口径（否则高估约 13 倍）
+            X[i, 3] = round(heat_reduction(t_src, m_dot, medium, hours, dT,
+                                           cop=HP_COP)["co2"], 1)
             X[i, 5] = round(0.357 * hours * 0.65 * 1000 / 10000, 1)
         elif p in ("吸收式热泵提温", "直接换热供暖",
                    "余热锅炉直接产汽", "热化学储热", "相变储热"):
@@ -535,26 +559,34 @@ def stage1(t_src, demand, continuity, t_steam=152):
     return keep, reasons
 
 
-def orc_reduction(t_src, hours, dT):
-    sweep = load_sweep(_mtime("dwsim_sweep_full.csv"))
+def _recovered_heat_kw(m_dot, medium, t_src, dT):
+    """按热源流量/介质估算实际可回收热功率（与供热路径同一口径）。"""
+    cp = {"热水/冷凝水": 4.2, "烟气": 1.1, "工艺液体": 2.5}[medium]
+    dt = max(t_src - 40.0 - dT, 5.0)
+    return m_dot * cp * dt
+
+
+def orc_reduction(t_src, m_dot, medium, hours, dT):
+    """ORC 发电减排：每 MW 回收热净功率 × 实际回收热功率（ṁ×cp×ΔT）折算年发电量。"""
+    sweep = load_sweep(_mtime("orc_sweep_coolprop.csv"))
     tmax_k = t_src + 273.15 - dT
     ok = sweep[sweep["heater_outlet_K"] <= tmax_k]
     if len(ok) == 0:
         return None
     effs = ok["thermal_eff"].values
     p10, p50, p90 = np.percentile(effs, [10, 50, 90])
-    # 每 MW 回收热口径：净功率(kW) = 热效率 × 1000
-    nets = effs * 1000.0
-    mwh = np.percentile(nets, 50) * hours / 1000.0
-    co2 = mwh * 0.581
+    q_kw = _recovered_heat_kw(m_dot, medium, t_src, dT)
+    net_abs = np.percentile(effs * 1000.0, 50) * q_kw / 1000.0
+    mwh = net_abs * hours / 1000.0
+    co2 = mwh * GRID_EF
     money = mwh * 1000 * 0.65 / 10000.0
     return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50 * 1000.0,
-            "p90": p90 * 1000.0,
+            "p90": p90 * 1000.0, "q_kw": q_kw, "net_abs_kW": net_abs,
             "mwh": mwh, "co2": co2, "money": money}
 
 
-def steam_reduction(t_src, hours, dT):
-    """高温蒸汽朗肯发电（每 MW 回收热口径，CoolProp IAPWS-97 物性模型）。"""
+def steam_reduction(t_src, m_dot, medium, hours, dT):
+    """高温蒸汽朗肯发电：每 MW 回收热净功率 × 实际回收热功率折算年发电量。"""
     sweep = load_steam_sweep(_mtime("steam_sweep_coolprop.csv"))
     # 热源温度 → 锅炉出口蒸汽温度：取 ~100℃ 端差，封顶 540℃（材料限制）
     t_boiler = min(max(t_src - 100.0, 180.0), 540.0) + 273.15
@@ -563,24 +595,36 @@ def steam_reduction(t_src, hours, dT):
         return None
     effs = ok["thermal_eff"].values
     p10, p50, p90 = np.percentile(effs, [10, 50, 90])
-    nets = effs * 1000.0
-    mwh = np.percentile(nets, 50) * hours / 1000.0
-    co2 = mwh * 0.581
+    q_kw = _recovered_heat_kw(m_dot, medium, t_src, dT)
+    net_abs = np.percentile(effs * 1000.0, 50) * q_kw / 1000.0
+    mwh = net_abs * hours / 1000.0
+    co2 = mwh * GRID_EF
     money = mwh * 1000 * 0.65 / 10000.0
     return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50 * 1000.0,
-            "p90": p90 * 1000.0,
+            "p90": p90 * 1000.0, "q_kw": q_kw, "net_abs_kW": net_abs,
             "mwh": mwh, "co2": co2, "money": money}
 
 
-def heat_reduction(t_src, m_dot, medium, hours, dT):
+def heat_reduction(t_src, m_dot, medium, hours, dT, cop=None):
+    """供热路径减排：默认替代天然气口径；压缩式热泵（cop 给定）扣自身耗电排放。"""
     cp = {"热水/冷凝水": 4.2, "烟气": 1.1, "工艺液体": 2.5}[medium]
     t_out = 40.0
     dt = max(t_src - t_out - dT, 5.0)
     q_kw = m_dot * cp * dt
     heat_gj = q_kw * hours * 3.6 / 1000.0
-    co2 = heat_gj * 0.0561 / 0.90
-    money = heat_gj * 98.0 / 10000.0
-    return {"q_kw": q_kw, "heat_gj": heat_gj, "co2": co2, "money": money}
+    co2_replaced = heat_gj * 0.0561 / 0.90          # 替代天然气锅炉
+    if cop:
+        mwh_elec = heat_gj / 3.6 / cop              # 供热量折算耗电
+        co2_elec = mwh_elec * GRID_EF               # 耗电排放
+        co2 = max(co2_replaced - co2_elec, 0.0)     # 净减排
+        money = (heat_gj * 98.0 - mwh_elec * 1000.0 * 0.65) / 10000.0
+    else:
+        mwh_elec, co2_elec = 0.0, 0.0
+        co2 = co2_replaced
+        money = heat_gj * 98.0 / 10000.0
+    return {"q_kw": q_kw, "heat_gj": heat_gj, "co2": co2, "money": money,
+            "co2_replaced": co2_replaced, "co2_elec": co2_elec,
+            "mwh_elec": mwh_elec}
 
 
 # ---------------------------------------------------------------
@@ -681,17 +725,20 @@ def lambda_figure(survivors, X_lam):
 
 
 def _current_work_point(sweep, t_k, cost_fn, temp_col):
-    """按当前热源温度折算蒸发/锅炉出口温度，在扫描数据中取最近可行点（示意估算）。"""
-    t_k = float(min(max(t_k, sweep[temp_col].min()), sweep[temp_col].max()))
-    idx = (sweep[temp_col] - t_k).abs().idxmin()
-    row = sweep.loc[idx]
-    net_mw = float(row["thermal_eff"]) * 1000.0
-    cost = cost_fn(row)
-    return net_mw, cost, float(row["thermal_eff"])
+    """按当前热源温度折算蒸发/锅炉出口温度，取可行点热效率/成本的中位数（示意估算）。
+    2026-08-13 审计 H4：原"最近单行"对数据稀疏区噪声大，改为可行集 P50。"""
+    ok = sweep[sweep[temp_col] <= float(t_k)]
+    if len(ok) == 0:
+        return None
+    eff_med = float(np.median(ok["thermal_eff"].values))
+    net_mw = eff_med * 1000.0
+    costs = ok.apply(cost_fn, axis=1).values
+    cost = float(np.median(costs))
+    return net_mw, cost, eff_med
 
 
 def current_orc_point(t_src, dT):
-    sweep = load_sweep(_mtime("dwsim_sweep_full.csv"))
+    sweep = load_sweep(_mtime("orc_sweep_coolprop.csv"))
 
     def cost_fn(row):
         return (0.12 * 1000.0
@@ -750,29 +797,26 @@ def pareto_figure():
         name="pymoo 100 解（代理预测）",
         showlegend=True,
         hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<br>热效率 %{marker.color:.3f}<extra></extra>"))
-    pm = front[pareto_mask(front["net_kW"].to_numpy(),
-                           front["cost_proxy"].to_numpy())]
-    pf = pm.sort_values("cost_proxy")
+    vf = load_front_orc_verified(_mtime("front_orc_verified.csv"))
+    pf = vf.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines",
-        line=dict(color="#22D3EE", width=1.4, shape="spline"),
-        opacity=0.85,
-        name="帕累托前沿（非支配解，平滑插值示意）",
-        hovertemplate="前沿<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
-    fig.add_trace(go.Scatter(
-        x=pf["cost_proxy"], y=pf["net_kW"], mode="markers",
-        marker=dict(size=6, color="#22D3EE", opacity=0.8,
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines+markers",
+        line=dict(color="#22D3EE", width=1.8),
+        marker=dict(size=7, color="#22D3EE",
                     line=dict(color="#0B1220", width=1)),
-        name=f"非支配解（{len(pf)} 个）", showlegend=False,
-        hovertemplate="非支配解<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
-    real_pf = real.sort_values("cost_proxy")
+        opacity=0.95,
+        name=f"精确核验前沿（{len(pf)} 解）",
+        hovertemplate="精确核验前沿<br>成本代理 %{x:.0f} 万元"
+                      "<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    real_nd = real.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=real_pf["cost_proxy"], y=real_pf["net_kW"], mode="markers",
+        x=real_nd["cost_proxy"], y=real_nd["net_kW"], mode="markers",
         marker=dict(size=10, color="#56B4E9",
                     line=dict(color="#0B1220", width=1)),
-        name="16 解（CoolProp 精确复核）",
-        hovertemplate="16 解复核<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
-    best = real.loc[real["net_kW"].idxmax()]
+        name=f"CoolProp 复核抽样（{len(real_nd)} 解，已剔除被支配点）",
+        hovertemplate="复核抽样<br>成本代理 %{x:.0f} 万元"
+                      "<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    best = real_nd.loc[real_nd["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
         x=[best["cost_proxy"]], y=[best["net_kW"]], mode="markers",
         marker=dict(symbol="star", size=15, color="#FBBF24",
@@ -809,25 +853,29 @@ def pareto_figure():
 
 
 def pareto_co2_figure():
-    """碳减排—成本权衡图（极简：16 个 CoolProp 复核点 + 前沿线）。
-    减碳 = 净功率×8000h×0.581（推算）；成本为示意代理模型。"""
+    """碳减排—成本权衡图（精确核验前沿线 + 复核抽样点）。
+    减碳 = 净功率×8000h×0.581（2021年度全国电网平均排放因子，推算）；成本为示意代理模型。"""
     real = load_front_real(_mtime("pareto_front_real.csv"))
-    real = real.assign(co2=real["net_kW"] * 8000.0 / 1000.0 * 0.581)
+    real = real.assign(co2=real["net_kW"] * 8000.0 / 1000.0 * GRID_EF)
     real = real.assign(cost=0.12 * real["Q_in_kW"]
                         + 30.0 * (real["pump_outlet_Pa"] / 1e6) ** 2
                         + 120.0 * (1.0 - real["expander_eff"]))
     fig = go.Figure()
-    pf = real.sort_values("cost")
+    vf = load_front_orc_verified(_mtime("front_orc_verified.csv"))
+    vf = vf.assign(co2=vf["net_kW"] * 8000.0 / 1000.0 * GRID_EF)
+    pf = vf.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=pf["cost"], y=pf["co2"], mode="lines",
-        line=dict(color="#56B4E9", width=1.8, shape="spline"),
-        opacity=0.9, name="CoolProp 复核前沿（16 解，平滑插值示意）",
+        x=pf["cost_proxy"], y=pf["co2"], mode="lines+markers",
+        line=dict(color="#56B4E9", width=1.8),
+        marker=dict(size=6, color="#56B4E9",
+                    line=dict(color="#0B1220", width=1)),
+        opacity=0.95, name=f"精确核验前沿（{len(pf)} 解）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=real["cost"], y=real["co2"], mode="markers",
-        marker=dict(size=8, color="#56B4E9",
+        marker=dict(size=9, color="#56B4E9",
                     line=dict(color="#0B1220", width=1)),
-        name="CoolProp 复核点", showlegend=False,
+        name=f"CoolProp 复核抽样（{len(real)} 解，已剔除被支配点）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<br>净功率 %{customdata[0]:.1f} kW<extra></extra>",
         customdata=real[["net_kW"]].values))
     best = real.loc[real["net_kW"].idxmax()]
@@ -859,23 +907,19 @@ def steam_pareto_figure():
         x=sp["cost_proxy"], y=sp["net_kW"], mode="markers",
         marker=dict(size=8, color="#FBBF24", opacity=0.35,
                     line=dict(width=0, color="#0B1220")),
-        name="蒸汽朗肯 100 解（CoolProp 复核）",
+        name="蒸汽朗肯 100 解（CoolProp 复核搜索解）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
-    pm = sp[pareto_mask(sp["net_kW"].to_numpy(),
-                        sp["cost_proxy"].to_numpy())]
-    pf = pm.sort_values("cost_proxy")
+    vf = load_front_steam_verified(_mtime("front_steam_verified.csv"))
+    pf = vf.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines",
-        line=dict(color="#FBBF24", width=1.4, shape="spline"),
-        opacity=0.85,
-        name="帕累托前沿（非支配解，平滑插值示意）",
-        hovertemplate="前沿<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
-    fig.add_trace(go.Scatter(
-        x=pf["cost_proxy"], y=pf["net_kW"], mode="markers",
-        marker=dict(size=6, color="#FBBF24", opacity=0.8,
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines+markers",
+        line=dict(color="#FBBF24", width=1.8),
+        marker=dict(size=7, color="#FBBF24",
                     line=dict(color="#0B1220", width=1)),
-        name=f"非支配解（{len(pf)} 个）", showlegend=False,
-        hovertemplate="非支配解<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+        opacity=0.95,
+        name=f"精确核验前沿（{len(pf)} 解）",
+        hovertemplate="精确核验前沿<br>成本代理 %{x:.0f} 万元"
+                      "<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
     best = sp.loc[sp["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
         x=[best["cost_proxy"]], y=[best["net_kW"]], mode="markers",
@@ -1083,6 +1127,7 @@ with st.sidebar:
     st.markdown('<div class="side-sec">评价权重</div>', unsafe_allow_html=True)
     lam = st.slider("组合权重 λ（主观占比）", 0.0, 1.0, 0.5, 0.05)
     st.caption("λ=主观(AHP)占比；1−λ=客观(熵权)占比")
+    st.info("主观 AHP 权重为**演示假设**（正式应用需专家打分）；客观熵权随当前候选矩阵动态计算。")
 
     st.markdown('<div class="side-sec">工况库管理</div>', unsafe_allow_html=True)
     st.session_state.setdefault("_cond_default", conditions.copy())
@@ -1207,10 +1252,14 @@ def render_dashboard():
             f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
             f' · 权重来自 AHP+熵权组合赋权</span></div>',
             unsafe_allow_html=True)
+        if float(c.max()) >= 0.9995:
+            st.caption("贴近度≈1.000 说明该路径在**全部指标上占优**（正理想解距离 d⁺≈0），"
+                       "是数学结果而非写死；请结合第 2/3 名与贴近度差距判断稳健性。")
         st.caption("数据口径：能效列中 ORC 为 CoolProp 物性模型设计点热效率（约 12%~15%），"
                    "高温蒸汽发电按文献效率 25%（高温段 25%~38%）；压缩式热泵为一次能源效率"
                    "（COP2.8×电网效率38%≈106%），吸收式热泵为余热自驱动 COP0.75，直接换热/余热锅炉为热回收率；"
-                   "减排列按当前参数推算（替代购电/替代天然气），可复算；**投资/回收期**：ORC 引自《重庆大学学报》"
+                   "减排列按当前参数推算（发电=替代购电；供热=替代天然气；压缩式热泵另扣自身耗电排放），可复算；"
+                   "**投资/回收期**：ORC 引自《重庆大学学报》"
                    "(23800元/kW、5.58年)，压缩式与吸收式热泵的回收期引自同一对比研究"
                    "（李萌：4.23年/2.73年），投资为工程估算（大庆改造案例 627万/14.4MW 为特例，见案例对标），"
                    "直接换热/余热锅炉为工程估算，储热与 TEG 为示意；**运行成本**：压缩式按 COP2.8 反推耗电"
@@ -1227,19 +1276,32 @@ def render_dashboard():
 
     st.markdown('<div class="sec-title"><span class="tag">03</span>减碳与收益估算（推算口径，非实测）</div>',
                 unsafe_allow_html=True)
-    orc = orc_reduction(t_src, hours, dT) if demand in ("发电", "储热调峰") else None
+    orc = orc_reduction(t_src, m_dot, medium, hours, dT) if demand in (
+        "发电", "储热调峰") else None
     heat = heat_reduction(t_src, m_dot, medium, hours, dT) if demand in (
         "工艺蒸汽", "供暖/热水", "储热调峰") else None
+    hp = heat_reduction(t_src, m_dot, medium, hours, dT, cop=HP_COP) if demand in (
+        "工艺蒸汽", "供暖/热水", "储热调峰") else None
+    top_path = df_r.iloc[0]["路径"] if survivors else None
 
     c1, c2, c3, c4 = st.columns(4)
     if orc is not None:
-        c1.metric("ORC 可行工况数", f"{orc['n_cond']}", "1675 工况中")
-        c2.metric("净功率 P50（每 MW 热）", f"{orc['p50']:.0f} kW/MW热",
-                  f"P10~P90: {orc['p10']:.1f}~{orc['p90']:.1f}")
+        c1.metric("ORC 可行工况数", f"{orc['n_cond']}",
+                  f"{len(load_sweep(_mtime('orc_sweep_coolprop.csv')))} 工况中")
+        c2.metric("实际净功率（按流量折算）", f"{orc['net_abs_kW']:.0f} kW",
+                  f"P50 {orc['p50']:.0f} kW/MW热 × {orc['q_kw']:.0f} kW 回收热")
         c3.metric("年降碳（推算）", f"{orc['co2']:.1f} tCO2",
                   f"{orc['mwh']:.0f} MWh × 0.581")
         c4.metric("年节省电费（演示价 0.65 元/kWh）", f"{orc['money']:.1f} 万元",
                   "按替代购电口径")
+    elif top_path == "压缩式热泵提温" and hp is not None:
+        c1.metric("回收热功率（估算）", f"{hp['q_kw']:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
+        c2.metric("年回收热量", f"{hp['heat_gj']:.0f} GJ", f"{hours} h/年")
+        c3.metric("年降碳（净：替代天然气−耗电）", f"{hp['co2']:.1f} tCO2",
+                  f"替代 {hp['co2_replaced']:.0f} − 耗电 {hp['co2_elec']:.0f} tCO2"
+                  f"（COP {HP_COP}，{GRID_EF_LABEL}）")
+        c4.metric("年净节省（燃气费−电费，演示价）", f"{hp['money']:.1f} 万元",
+                  "按替代天然气、0.65 元/kWh 演示价")
     elif heat is not None:
         c1.metric("回收热功率（估算）", f"{heat['q_kw']:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
         c2.metric("年回收热量", f"{heat['heat_gj']:.0f} GJ", f"{hours} h/年")
@@ -1249,33 +1311,37 @@ def render_dashboard():
     else:
         for cc in (c1, c2, c3, c4):
             cc.metric("—", "—", "无可用估算")
-    steam = steam_reduction(t_src, hours, dT) if demand in ("发电", "储热调峰") else None
+    steam = steam_reduction(t_src, m_dot, medium, hours, dT) if demand in (
+        "发电", "储热调峰") else None
     if steam is not None:
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("蒸汽朗肯可行工况数", f"{steam['n_cond']}", "1600 工况中")
-        s2.metric("净功率 P50（每 MW 热）", f"{steam['p50']:.0f} kW/MW热",
-                  f"P10~P90: {steam['p10']:.0f}~{steam['p90']:.0f}")
+        s2.metric("实际净功率（按流量折算）", f"{steam['net_abs_kW']:.0f} kW",
+                  f"P50 {steam['p50']:.0f} kW/MW热 × {steam['q_kw']:.0f} kW 回收热")
         s3.metric("年降碳（推算）", f"{steam['co2']:.1f} tCO2",
                   f"{steam['mwh']:.0f} MWh × 0.581")
         s4.metric("年节省电费（演示价 0.65 元/kWh）", f"{steam['money']:.1f} 万元",
                   "按替代购电口径")
-    st.caption("说明：ORC/蒸汽发电数字基于 CoolProp 物性模型（每 MW 回收热口径，推算）；供热数字为替代天然气估算，参数（电价/气价/锅炉效率）均为演示假设，正式核算须以项目实测为准。")
+    st.caption(f"说明：ORC/蒸汽发电数字基于 CoolProp 物性模型（净功率列按每 MW 回收热口径；"
+               f"年发电量/降碳/电费按实际回收热功率 ṁ×cp×ΔT 折算，随流量实时变化；"
+               f"电网因子采用{GRID_EF_LABEL}）；供热数字为替代天然气估算，其中压缩式热泵已扣耗电排放"
+               "（COP 2.8）；参数（电价/气价/锅炉效率）均为演示假设，正式核算须以项目实测为准。")
 
     st.divider()
 
     st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
                 unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">青色渐变点 = 代理预测 100 解（按热效率着色）｜青色平滑线 = 非支配前沿（代理口径）｜蓝点 = 16 解 CoolProp 精确复核（前沿抽样验证）｜金星 = 最优点；'
+    st.markdown('<div class="sec-note">青色渐变点 = 代理预测 100 解（按热效率着色，含被支配点）｜青色线 = 精确核验前沿（10 解，CoolProp 扫描网格非支配子集）｜蓝点 = CoolProp 复核抽样（14 解，已剔除 2 个被支配点）｜金星 = 最优点；'
                 '横轴为设备成本代理（示意），纵轴为每 MW 回收热净功率（kW/MW热）；'
                 '品红菱形 = 当前输入估算工作点（按端差折算蒸发温度，示意；发电需求时显示）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">碳减排—成本权衡：蓝点 = 16 个 CoolProp 复核前沿解（互不支配），平滑插值线仅为趋势示意；金星 = 最优点；净功率按每 MW 回收热口径，碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
+    st.markdown('<div class="sec-note">碳减排—成本权衡：蓝线 = 精确核验前沿（10 解）；蓝点 = CoolProp 复核抽样（14 解，原 16 解中 2 个被支配点已剔除）；金星 = 最优点；净功率按每 MW 回收热口径，碳减排 = 净功率 × 8000h × 0.581（2021年度全国电网平均排放因子，推算口径），成本为示意代理模型</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_co2_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核），金色平滑线 = 非支配前沿；'
+    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 复核搜索解），金色线 = 精确核验前沿（8 解）；'
                 '金星 = 最优点；品红菱形 = 当前输入估算工作点（≥200℃ 发电需求时显示，示意）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(steam_pareto_figure(), width="stretch")
@@ -1345,15 +1411,20 @@ def render_dashboard():
     with st.expander("数据口径与免责声明（答辩必讲）"):
         st.markdown(
             "1. **仿真数据**：CoolProp（IAPWS-97 / REFPROP）物性模型自建朗肯循环仿真，"
-            "ORC 1675 工况 + 蒸汽朗肯 1600 工况（能量守恒偏差 <1e-9 kW）；"
+            "ORC 5925 工况（100~350℃，2026-08-13 扩展）+ 蒸汽朗肯 1600 工况"
+            "（180~540℃，能量守恒偏差 <1e-9 kW）；"
             "旧版 DWSIM 9.0.5 400 工况数据保留存档（其工质曾混入水，已弃用并修正为纯异丁烷）；\n"
             "2. **代理模型**：scikit-learn MLP，ORC 净功率测试集 R²≈0.99、蒸汽朗肯 R²≈0.998；"
-            "pymoo 各 100 解为代理预测，ORC 前沿 16 解 + 蒸汽前沿 100 解经精确朗肯模型复核；\n"
-            "3. **减碳**：ORC/蒸汽发电为物性模型热效率 × 每 MW 回收热净功率 × 运行小时 × 华东电网因子 0.581 的"
+            "pymoo 各 100 解为代理预测搜索解；正式成果为 ORC 10 解精确核验前沿 + 14 个复核抽样点"
+            "（原 16 解中 2 个被支配点已剔除）、蒸汽 8 解精确核验前沿；\n"
+            "3. **减碳**：ORC/蒸汽发电为物性模型热效率 × 每 MW 回收热净功率 × 运行小时 × "
+            "2021年度全国电网平均排放因子 0.5810（生态环境部 2022-03 发布）的"
             "**推算口径**，供热为替代天然气估算，均非实测；"
             "设备制造排放 15.0 tCO2e 为工程估算（20 年摊销 0.75 t/年），全生命周期口径年净降碳约 572.4 t；\n"
             "4. **成本/回收期**：示意性代理模型，非真实报价；CCER 收益为情景假设，未完成备案方法学前不计入基准财务指标；\n"
-            "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源。")
+            "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源；\n"
+            "6. **方法边界**：当前两级决策为**单路径比选**版本；工业最佳实践中的梯级利用"
+            "（高温段先发电/产汽、低温段再供热）已列入后续扩展，答辩按此口径说明。")
 
     st.markdown(
         '<div class="footer">'
