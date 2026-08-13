@@ -681,39 +681,44 @@ def lambda_figure(survivors, X_lam):
 
 
 def pareto_figure():
+    """ORC 帕累托前沿：每 MW 回收热净功率 — 设备成本代理（与申报口径一致）。"""
     front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
-    real = load_front_real(_mtime("pareto_front_real.csv")).sort_values("Q_in_kW")
-    ver = load_verify(_mtime("dwsim_verify_pymoo.csv"))
+    real = load_front_real(_mtime("pareto_front_real.csv"))
+    real = real.assign(cost_proxy=0.12 * real["Q_in_kW"]
+                       + 30.0 * (real["pump_outlet_Pa"] / 1e6) ** 2
+                       + 120.0 * (1.0 - real["expander_eff"]))
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=front["Q_in_kW"], y=front["net_kW"], mode="markers",
+        x=front["cost_proxy"], y=front["net_kW"], mode="markers",
         marker=dict(size=8, color=front["thermal_eff"],
                     colorscale=[[0, "#0EA5E9"], [0.5, "#22D3EE"], [1, "#34D399"]],
                     opacity=0.65, line=dict(width=0, color="#0B1220"),
                     colorbar=dict(title="热效率", thickness=14,
                                   tickfont=dict(color="#94A3B8", size=11))),
         name="pymoo 100 解（代理预测）",
-        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>热效率 %{marker.color:.3f}<extra></extra>"))
+        hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<br>热效率 %{marker.color:.3f}<extra></extra>"))
+    pf = real.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=real["Q_in_kW"], y=real["net_kW"], mode="lines+markers",
-        line=dict(color="#56B4E9", width=1.8, shape="spline"),
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines+markers",
+        line=dict(color="#56B4E9", width=1.8),
         marker=dict(size=8, color="#56B4E9",
                     line=dict(color="#0B1220", width=1)),
         name="16 解（CoolProp 复核）",
-        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br><extra>16 解复核</extra>"))
+        hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra>16 解复核</extra>"))
+    best = real.loc[real["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
-        x=ver["dwsim_qin"], y=ver["dwsim_net"], mode="markers+text",
-        marker=dict(symbol="star", size=14, color="#FBBF24",
+        x=[best["cost_proxy"]], y=[best["net_kW"]], mode="markers",
+        marker=dict(symbol="star", size=15, color="#FBBF24",
                     line=dict(color="#0B1220", width=1)),
-        text=[f"{e:.1f}%" for e in ver["net_err_pct"]],
-        textposition="top center", textfont=dict(color="#FBBF24", size=11),
-        name="5 个 DWSIM 复核点（旧版存档）",
-        hovertemplate="吸热量 %{x:.1f} kW<br>净功率 %{y:.1f} kW<br>误差 %{text}<extra></extra>"))
+        name=f"最优点 {best['net_kW']:.1f} kW/MW热",
+        hovertemplate="最优点<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
-        xaxis=dict(showgrid=False, zeroline=False, title="吸热量 Q_in (kW)"),
-        yaxis=dict(showgrid=False, zeroline=False, title="净功率 (kW)"),
+        xaxis=dict(showgrid=False, zeroline=False,
+                   title="设备成本代理（万元，示意）"),
+        yaxis=dict(showgrid=False, zeroline=False,
+                   title="净功率（kW/MW 回收热）"),
         legend=dict(orientation="h", y=1.1, x=0, bgcolor="rgba(0,0,0,0)",
                     font=dict(size=12)),
         margin=dict(l=40, r=20, t=30, b=40))
@@ -1146,7 +1151,8 @@ def render_dashboard():
 
     st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
                 unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 16 解 CoolProp 复核前沿｜金星 = 5 个 DWSIM 复核点（旧版存档）</div>',
+    st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 16 解 CoolProp 复核前沿（互不支配）｜金星 = 最优点；'
+                '横轴为设备成本代理（示意），纵轴为每 MW 回收热净功率（kW/MW热）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
