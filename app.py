@@ -76,6 +76,7 @@ def load_weights(_t=None):
 
 DEMAND_OPTIONS = ["发电", "工艺蒸汽", "供暖/热水", "储热调峰"]
 FLOW_PROFILES = ["平稳波动", "班次阶跃", "随机游走"]
+NAV_ITEMS = ["手动设定", "典型工况", "实时模拟"]
 
 
 def load_conditions():
@@ -307,6 +308,29 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
 [data-testid="stMetricLabel"] p { font-size: 13px !important; }
 .sec-title { font-size: 21px; margin: 14px 0 4px; }
 [data-testid="stVerticalBlockBorderWrapper"] { padding: 4px 6px; }
+
+/* ---- 顶部导航（多页面切换）---- */
+.topnav-wrap { margin: 16px 0 8px; }
+.nav-item {
+  text-align: center; padding: 11px 0; border-radius: 10px;
+  font-size: 15px; font-weight: 700; letter-spacing: 1px;
+  border: 1px solid var(--line); color: var(--text);
+  background: linear-gradient(180deg, rgba(17,28,46,.92), rgba(11,18,32,.92));
+}
+.nav-active {
+  background: linear-gradient(92deg, #0EA5E9, #10B981) !important;
+  color: #06121f !important; border-color: transparent;
+  box-shadow: 0 4px 18px rgba(34,211,238,.30);
+}
+.topnav-wrap .stButton > button {
+  background: linear-gradient(180deg, rgba(17,28,46,.92), rgba(11,18,32,.92));
+  color: var(--text); border: 1px solid var(--line); font-weight: 700;
+  letter-spacing: 1px;
+}
+.topnav-wrap .stButton > button:hover {
+  background: linear-gradient(92deg, rgba(14,165,233,.25), rgba(16,185,129,.25));
+  color: #A5F3FC; border-color: rgba(34,211,238,.45);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -839,11 +863,25 @@ st.markdown(
     '<div class="hero-sub">《工业废热或余热回收利用降碳技术路径与智能优化评价方法》｜路径筛选 → TOPSIS 排序 → 减碳估算 → 帕累托前沿 → 动态 LCA</div>'
     '</div>', unsafe_allow_html=True)
 
+# 顶部导航（学校网站风格：三个独立页面，点击切换）
+st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
+nav_cols = st.columns(3, gap="small")
+for item in NAV_ITEMS:
+    with nav_cols[NAV_ITEMS.index(item)]:
+        if st.session_state.get("mode", "手动设定") == item:
+            st.markdown(f'<div class="nav-item nav-active">{item}</div>',
+                        unsafe_allow_html=True)
+        else:
+            if st.button(item, key=f"nav_{item}", width="stretch"):
+                st.session_state["mode"] = item
+                st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
+
 with st.sidebar:
     st.markdown('<div style="font-size:17px;font-weight:800;color:#E2E8F0;margin-bottom:4px">场景参数</div>',
                 unsafe_allow_html=True)
     st.markdown('<div class="side-sec">热源与需求</div>', unsafe_allow_html=True)
-    data_mode = st.radio("数据输入方式", ["手动设定", "典型工况", "实时模拟"])
+    data_mode = st.session_state.get("mode", "手动设定")
     conditions = load_conditions()
     if data_mode == "手动设定":
         t_src = st.number_input("热源温度 (℃)", 40.0, 900.0, 120.0, 5.0)
@@ -1007,6 +1045,10 @@ def render_dashboard():
                                        index=range(len(rt["hist"]))),
                           height=220)
         st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+    elif data_mode == "手动设定":
+        st.caption("手动设定：自由输入热源温度与流量，即时输出两级决策与降碳核算结果")
+    elif data_mode == "典型工况":
+        st.caption("典型工况：从工况库选择真实场景，一键查看推荐路径与核算结果")
     keep, reasons = stage1(t_src, demand, continuity)
     survivors = [p for p in PATH_NAMES if keep[p]]
 
