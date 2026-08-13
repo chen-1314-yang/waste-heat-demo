@@ -276,6 +276,37 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---- 布局密度优化（2026-08-13）---- */
+[data-testid="stSidebar"] {
+  width: 400px !important;
+  min-width: 400px !important;
+  background: linear-gradient(180deg, rgba(13,22,38,.97), rgba(11,18,32,.97));
+}
+[data-testid="stSidebarContent"] { padding: 1.3rem 1.4rem 2rem; }
+[data-testid="stSidebar"] label p,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+  font-size: 14px !important; color: #CBD5E1; font-weight: 600; letter-spacing: .2px;
+}
+[data-testid="stSidebar"] .stNumberInput input,
+[data-testid="stSidebar"] .stSlider input { font-size: 15px !important; }
+[data-testid="stSidebar"] .stSelectbox span,
+[data-testid="stSidebar"] .stRadio label p { font-size: 14px !important; }
+[data-testid="stSidebar"] .stToggle label { font-size: 14px !important; }
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+  font-size: 12.5px !important; line-height: 1.55;
+}
+[data-testid="stSidebar"] .stExpander summary p { font-size: 13px !important; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom: 6px; }
+
+.block-container {
+  max-width: 1380px; margin: 0 auto; padding: 1.4rem 2rem 3rem;
+}
+[data-testid="stMetric"] { padding: 16px 18px; }
+[data-testid="stMetricValue"] { font-size: 22px !important; }
+[data-testid="stMetricLabel"] p { font-size: 13px !important; }
+.sec-title { font-size: 21px; margin: 14px 0 4px; }
+[data-testid="stVerticalBlockBorderWrapper"] { padding: 4px 6px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -883,21 +914,6 @@ with st.sidebar:
             float(st.session_state.get("rt_speed", 1.0)), 0.5)
         st.session_state["rt_paused"] = st.toggle(
             "暂停实时数据", value=st.session_state.get("rt_paused", False))
-
-        @st.fragment(run_every=3.0)
-        def _rt_panel():
-            _advance_rt()
-            rt = st.session_state["rt"]
-            c1, c2 = st.columns(2)
-            c1.metric("热源温度", f"{rt['t']:.0f} ℃")
-            c2.metric("热源流量", f"{rt['m']:.1f} kg/s")
-            st.caption("模拟实时数据（非实测）· 每 3 秒刷新")
-            if rt["hist"]:
-                st.line_chart(pd.DataFrame({"温度℃": rt["hist"]},
-                                           index=range(len(rt["hist"]))),
-                              height=150)
-
-        _rt_panel()
         t_src = st.session_state["rt"]["t"]
         m_dot = st.session_state["rt"]["m"]
     demand = st.selectbox("用能需求", DEMAND_OPTIONS, key="demand_val")
@@ -973,8 +989,24 @@ with st.sidebar:
 
 def render_dashboard():
     if data_mode == "实时模拟":
+        _advance_rt()
         globals()["t_src"] = st.session_state.get("rt", {}).get("t", 300.0)
         globals()["m_dot"] = st.session_state.get("rt", {}).get("m", 50.0)
+        rt = st.session_state["rt"]
+        cond_name = st.session_state.get("rt_cond_applied", "—")
+        st.markdown(
+            '<div class="sec-title"><span class="tag">LIVE</span>实时工况监测（模拟）</div>',
+            unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("热源温度", f"{rt['t']:.0f} ℃")
+        m2.metric("热源流量", f"{rt['m']:.1f} kg/s")
+        m3.metric("当前工况", cond_name)
+        st.caption("模拟实时数据（非实测）· 每 3 秒刷新 · 波动曲线全宽展示，无需手动拉伸")
+        if rt["hist"]:
+            st.line_chart(pd.DataFrame({"温度℃": rt["hist"]},
+                                       index=range(len(rt["hist"]))),
+                          height=220)
+        st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
     keep, reasons = stage1(t_src, demand, continuity)
     survivors = [p for p in PATH_NAMES if keep[p]]
 
