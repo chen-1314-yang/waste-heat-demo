@@ -680,6 +680,40 @@ def lambda_figure(survivors, X_lam):
     return fig
 
 
+def _current_work_point(sweep, t_k, cost_fn, temp_col):
+    """按当前热源温度折算蒸发/锅炉出口温度，在扫描数据中取最近可行点（示意估算）。"""
+    t_k = float(min(max(t_k, sweep[temp_col].min()), sweep[temp_col].max()))
+    idx = (sweep[temp_col] - t_k).abs().idxmin()
+    row = sweep.loc[idx]
+    net_mw = float(row["thermal_eff"]) * 1000.0
+    cost = cost_fn(row)
+    return net_mw, cost, float(row["thermal_eff"])
+
+
+def current_orc_point(t_src, dT):
+    sweep = load_sweep(_mtime("dwsim_sweep_full.csv"))
+
+    def cost_fn(row):
+        return (0.12 * 1000.0
+                + 30.0 * (float(row["pump_outlet_Pa"]) / 1e6) ** 2
+                + 120.0 * (1.0 - float(row["expander_eff"])))
+
+    return _current_work_point(sweep, t_src + 273.15 - float(dT),
+                               cost_fn, "heater_outlet_K")
+
+
+def current_steam_point(t_src, dT):
+    sweep = load_steam_sweep(_mtime("steam_sweep_coolprop.csv"))
+
+    def cost_fn(row):
+        return (0.12 * 1000.0
+                + 80.0 * (float(row["boiler_Pa"]) / 1e6)
+                + 120.0 * (1.0 - float(row["expander_eff"])))
+
+    return _current_work_point(sweep, t_src + 273.15 - float(dT),
+                               cost_fn, "boiler_outlet_K")
+
+
 def pareto_figure():
     """ORC 帕累托前沿：每 MW 回收热净功率 — 设备成本代理（与申报口径一致）。"""
     front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
@@ -712,6 +746,22 @@ def pareto_figure():
                     line=dict(color="#0B1220", width=1)),
         name=f"最优点 {best['net_kW']:.1f} kW/MW热",
         hovertemplate="最优点<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    current = None
+    try:
+        if demand == "发电" and t_src >= 110.0:
+            current = current_orc_point(t_src, dT)
+    except Exception:
+        current = None
+    if current is not None:
+        fig.add_trace(go.Scatter(
+            x=[current[1]], y=[current[0]], mode="markers+text",
+            marker=dict(symbol="diamond", size=13, color="#F472B6",
+                        line=dict(color="#0B1220", width=1)),
+            text=[f"{current[0]:.0f}"], textposition="top center",
+            textfont=dict(color="#F472B6", size=12),
+            name="当前工况估算（示意）",
+            hovertemplate=("当前工况估算<br>净功率 %{y:.1f} kW/MW热"
+                           "<br>成本代理 %{x:.0f} 万元<extra></extra>")))
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,28,46,.55)", height=470, font=CHART_FONT,
@@ -785,6 +835,22 @@ def steam_pareto_figure():
                     line=dict(color="#0B1220", width=1)),
         name=f"最优点 {best['net_kW']:.0f} kW/MW热",
         hovertemplate="最优点<br>净功率 %{y:.0f} kW/MW热<extra></extra>"))
+    current = None
+    try:
+        if demand == "发电" and t_src >= 200.0:
+            current = current_steam_point(t_src, dT)
+    except Exception:
+        current = None
+    if current is not None:
+        fig.add_trace(go.Scatter(
+            x=[current[1]], y=[current[0]], mode="markers+text",
+            marker=dict(symbol="diamond", size=13, color="#F472B6",
+                        line=dict(color="#0B1220", width=1)),
+            text=[f"{current[0]:.0f}"], textposition="top center",
+            textfont=dict(color="#F472B6", size=12),
+            name="当前工况估算（示意）",
+            hovertemplate=("当前工况估算<br>净功率 %{y:.1f} kW/MW热"
+                           "<br>成本代理 %{x:.0f} 万元<extra></extra>")))
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,28,46,.55)", height=400, font=CHART_FONT,
@@ -1152,7 +1218,8 @@ def render_dashboard():
     st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
                 unsafe_allow_html=True)
     st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 16 解 CoolProp 复核前沿（互不支配）｜金星 = 最优点；'
-                '横轴为设备成本代理（示意），纵轴为每 MW 回收热净功率（kW/MW热）</div>',
+                '横轴为设备成本代理（示意），纵轴为每 MW 回收热净功率（kW/MW热）；'
+                '品红菱形 = 当前输入估算工作点（按端差折算蒸发温度，示意；发电需求时显示）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
@@ -1160,7 +1227,8 @@ def render_dashboard():
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_co2_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核）</div>',
+    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核）；'
+                '品红菱形 = 当前输入估算工作点（≥200℃ 发电需求时显示，示意）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(steam_pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
