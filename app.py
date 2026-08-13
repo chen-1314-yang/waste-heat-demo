@@ -714,6 +714,24 @@ def current_steam_point(t_src, dT):
                                cost_fn, "boiler_outlet_K")
 
 
+def pareto_mask(x, y, x_max=True, y_min=True):
+    """返回非支配掩码：x 越大越好（默认），y 越小越好（默认）。"""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(x)
+    mask = np.ones(n, dtype=bool)
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            x_better = (x[j] > x[i]) if x_max else (x[j] < x[i])
+            y_better = (y[j] < y[i]) if y_min else (y[j] > y[i])
+            if (x[j] >= x[i]) == x_max and (y[j] <= y[i]) == y_min and (x_better or y_better):
+                mask[i] = False
+                break
+    return mask
+
+
 def pareto_figure():
     """ORC 帕累托前沿：每 MW 回收热净功率 — 设备成本代理（与申报口径一致）。"""
     front = load_front_pymoo(_mtime("pymoo_pareto.csv"))
@@ -726,19 +744,34 @@ def pareto_figure():
         x=front["cost_proxy"], y=front["net_kW"], mode="markers",
         marker=dict(size=8, color=front["thermal_eff"],
                     colorscale=[[0, "#0EA5E9"], [0.5, "#22D3EE"], [1, "#34D399"]],
-                    opacity=0.65, line=dict(width=0, color="#0B1220"),
+                    opacity=0.35, line=dict(width=0, color="#0B1220"),
                     colorbar=dict(title="热效率", thickness=14,
                                   tickfont=dict(color="#94A3B8", size=11))),
         name="pymoo 100 解（代理预测）",
+        showlegend=True,
         hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<br>热效率 %{marker.color:.3f}<extra></extra>"))
-    pf = real.sort_values("cost_proxy")
+    pm = front[pareto_mask(front["net_kW"].to_numpy(),
+                           front["cost_proxy"].to_numpy())]
+    pf = pm.sort_values("cost_proxy")
     fig.add_trace(go.Scatter(
-        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines+markers",
-        line=dict(color="#56B4E9", width=1.8),
-        marker=dict(size=8, color="#56B4E9",
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines",
+        line=dict(color="#22D3EE", width=1.4, shape="spline"),
+        opacity=0.85,
+        name="帕累托前沿（非支配解，平滑插值示意）",
+        hovertemplate="前沿<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="markers",
+        marker=dict(size=6, color="#22D3EE", opacity=0.8,
                     line=dict(color="#0B1220", width=1)),
-        name="16 解（CoolProp 复核）",
-        hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra>16 解复核</extra>"))
+        name=f"非支配解（{len(pf)} 个）", showlegend=False,
+        hovertemplate="非支配解<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    real_pf = real.sort_values("cost_proxy")
+    fig.add_trace(go.Scatter(
+        x=real_pf["cost_proxy"], y=real_pf["net_kW"], mode="markers",
+        marker=dict(size=10, color="#56B4E9",
+                    line=dict(color="#0B1220", width=1)),
+        name="16 解（CoolProp 精确复核）",
+        hovertemplate="16 解复核<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
     best = real.loc[real["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
         x=[best["cost_proxy"]], y=[best["net_kW"]], mode="markers",
@@ -787,8 +820,8 @@ def pareto_co2_figure():
     pf = real.sort_values("cost")
     fig.add_trace(go.Scatter(
         x=pf["cost"], y=pf["co2"], mode="lines",
-        line=dict(color="#56B4E9", width=1.8),
-        opacity=0.9, name="CoolProp 复核前沿（16 解）",
+        line=dict(color="#56B4E9", width=1.8, shape="spline"),
+        opacity=0.9, name="CoolProp 复核前沿（16 解，平滑插值示意）",
         hovertemplate="成本代理 %{x:.0f} 万元<br>年碳减排 %{y:.0f} tCO2<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=real["cost"], y=real["co2"], mode="markers",
@@ -824,10 +857,25 @@ def steam_pareto_figure():
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=sp["cost_proxy"], y=sp["net_kW"], mode="markers",
-        marker=dict(size=8, color="#FBBF24",
-                    line=dict(color="#0B1220", width=1)),
+        marker=dict(size=8, color="#FBBF24", opacity=0.35,
+                    line=dict(width=0, color="#0B1220")),
         name="蒸汽朗肯 100 解（CoolProp 复核）",
-        hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.0f} kW/MW热<extra></extra>"))
+        hovertemplate="成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    pm = sp[pareto_mask(sp["net_kW"].to_numpy(),
+                        sp["cost_proxy"].to_numpy())]
+    pf = pm.sort_values("cost_proxy")
+    fig.add_trace(go.Scatter(
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="lines",
+        line=dict(color="#FBBF24", width=1.4, shape="spline"),
+        opacity=0.85,
+        name="帕累托前沿（非支配解，平滑插值示意）",
+        hovertemplate="前沿<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=pf["cost_proxy"], y=pf["net_kW"], mode="markers",
+        marker=dict(size=6, color="#FBBF24", opacity=0.8,
+                    line=dict(color="#0B1220", width=1)),
+        name=f"非支配解（{len(pf)} 个）", showlegend=False,
+        hovertemplate="非支配解<br>成本代理 %{x:.0f} 万元<br>净功率 %{y:.1f} kW/MW热<extra></extra>"))
     best = sp.loc[sp["net_kW"].idxmax()]
     fig.add_trace(go.Scatter(
         x=[best["cost_proxy"]], y=[best["net_kW"]], mode="markers",
@@ -1217,18 +1265,18 @@ def render_dashboard():
 
     st.markdown('<div class="sec-title"><span class="tag">04</span>帕累托前沿 · 多目标优化结果</div>',
                 unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">蓝点 = 代理预测 100 解｜蓝线 = 16 解 CoolProp 复核前沿（互不支配）｜金星 = 最优点；'
+    st.markdown('<div class="sec-note">青色渐变点 = 代理预测 100 解（按热效率着色）｜青色平滑线 = 非支配前沿（代理口径）｜蓝点 = 16 解 CoolProp 精确复核（前沿抽样验证）｜金星 = 最优点；'
                 '横轴为设备成本代理（示意），纵轴为每 MW 回收热净功率（kW/MW热）；'
                 '品红菱形 = 当前输入估算工作点（按端差折算蒸发温度，示意；发电需求时显示）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">碳减排—成本权衡：蓝线 = 16 个 CoolProp 复核前沿解（互不支配）；金星 = 最优点；净功率按每 MW 回收热口径，碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
+    st.markdown('<div class="sec-note">碳减排—成本权衡：蓝点 = 16 个 CoolProp 复核前沿解（互不支配），平滑插值线仅为趋势示意；金星 = 最优点；净功率按每 MW 回收热口径，碳减排 = 净功率 × 8000h × 0.581（推算口径），成本为示意代理模型</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(pareto_co2_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核）；'
-                '品红菱形 = 当前输入估算工作点（≥200℃ 发电需求时显示，示意）</div>',
+    st.markdown('<div class="sec-note">高温蒸汽朗肯前沿（每 MW 回收热口径）：金点 = 100 解（CoolProp 精确复核），金色平滑线 = 非支配前沿；'
+                '金星 = 最优点；品红菱形 = 当前输入估算工作点（≥200℃ 发电需求时显示，示意）</div>',
                 unsafe_allow_html=True)
     st.plotly_chart(steam_pareto_figure(), width="stretch")
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
