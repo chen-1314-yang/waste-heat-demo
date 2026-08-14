@@ -2,6 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
+rem 让捆绑版 git 能找到 https 传输组件（2026-08-14 修复）
+set "GIT_EXEC_PATH=C:\Users\23549\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\mingw64\bin"
+
 set "REPO=%~dp0"
 if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
 git config --global --add safe.directory "%REPO%" >nul 2>&1
