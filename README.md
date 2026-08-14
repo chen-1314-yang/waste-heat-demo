@@ -9,7 +9,7 @@
 1. 第一级热力学规则粗筛（8 条技术路径，给出排除/通过原因）；
 2. 第二级 TOPSIS 精细排序（AHP + 熵权组合权重，λ 可调）；
 3. 减碳与收益估算（ORC 发电 / 供热替代天然气）；
-4. 帕累托前沿（ORC 16 解精确模型复核 + pymoo 100 解 + 蒸汽朗肯 100 解）；
+4. 帕累托前沿（ORC 10 解精确核验前沿 + 14 复核抽样点 + pymoo 100 解 + 蒸汽朗肯 100 解）；
 5. 动态 LCA 月度滚动核算（年降碳 573.1 tCO2，推算口径）；
 6. λ 敏感性分析（排序稳定性）；
 7. 工况库驱动的实时模拟（`data/conditions_db.csv` 可编辑，模拟 DCS 波动数据）。
@@ -23,8 +23,8 @@ GitHub 仓库 `data/conditions_db.csv`，或把文件发给我们代传。
 
 ## 数据口径（务必阅读）
 
-- **CoolProp 物性仿真**：ORC 1675 工况 + 蒸汽朗肯 1600 工况（能量守恒最大偏差 <1e-9 kW）；
-- **帕累托前沿**：ORC 16 解经精确朗肯模型重算生成（109.6~150.5 kW/MW热）；pymoo 100 解为代理模型预测；
+- **CoolProp 物性仿真**：ORC 5925 工况（100~350℃）+ 蒸汽朗肯 1600 工况（180~540℃）（能量守恒最大偏差 <1e-9 kW）；
+- **帕累托前沿**：ORC 10 解精确核验前沿（111.4~150.7 kW/MW热）+ 14 个复核抽样点（113.7~150.5，原 16 解中 2 个被支配点已剔除）；pymoo 100 解为代理模型预测；
   5 个代表点复核（每 MW 回收热口径：ORC 净功率误差 0.17%~1.99%、热效率 0.03%~1.26%；
   蒸汽朗肯净功率误差 0.84%~1.41%、热效率 0.36%~0.64%；最优点 0.4%）；
 - **工况库**：`data/conditions_db.csv` 为工程/文献示例（示意），可编辑；3 个对标案例有公开出处；
@@ -62,9 +62,9 @@ waste-heat-demo/
 ├── .streamlit/config.toml  # 免邮箱提示 / headless
 └── data/                   # 演示数据（可复算）
     ├── conditions_db.csv       # 工况库（可编辑：实时模拟/典型工况的数据源）
-    ├── orc_sweep_coolprop.csv  # ORC 1675 工况（CoolProp）
-    ├── steam_sweep_coolprop.csv # 蒸汽朗肯 1600 工况（CoolProp）
-    ├── pareto_front_real.csv   # ORC 16 解复核前沿
+    ├── orc_sweep_coolprop.csv  # ORC 5925 工况（100~350℃，CoolProp）
+    ├── steam_sweep_coolprop.csv # 蒸汽朗肯 1600 工况（180~540℃，CoolProp）
+    ├── pareto_front_real.csv   # ORC 14 个复核抽样点（原 16 解剔除 2 个被支配点）
     ├── steam_pareto.csv        # 蒸汽朗肯前沿
     ├── pymoo_pareto.csv        # pymoo 100 解
     ├── orc_surrogate.joblib / steam_surrogate.joblib  # 代理模型
