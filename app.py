@@ -19,7 +19,7 @@ import decision_core as dc
 import decision_v2_ui as v2u
 
 st.set_page_config(page_title="工业余热回收智能决策演示平台", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="auto")
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(DIR, "data")
