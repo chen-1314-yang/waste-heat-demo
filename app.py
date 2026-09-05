@@ -358,6 +358,100 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
   background: linear-gradient(92deg, rgba(14,165,233,.25), rgba(16,185,129,.25));
   color: #A5F3FC; border-color: rgba(34,211,238,.45);
 }
+
+/* ---- 移动端适配（2026-09-05）：窄屏单列堆叠 + 可触摸横向滚动 ---- */
+@media (max-width: 900px) {
+  html, body {
+    overflow-x: hidden;
+  }
+  .block-container {
+    max-width: 100% !important;
+    padding: 0.9rem 0.7rem 2.2rem !important;
+  }
+  .hero-title {
+    font-size: 26px !important;
+  }
+  .hero-sub {
+    font-size: 12.5px !important;
+    line-height: 1.65;
+  }
+  .hero-badge {
+    font-size: 11px !important;
+    padding: 2px 9px !important;
+    margin-right: 5px;
+  }
+  .topnav-wrap {
+    display: flex;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .topnav-wrap > div {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .topnav-wrap .stButton > button {
+    font-size: 13px !important;
+    padding: 9px 2px !important;
+    letter-spacing: 0 !important;
+  }
+  /* 侧栏：收起时按屏幕宽度适配，避免 400px 固定宽度溢出 */
+  [data-testid="stSidebar"] {
+    width: min(88vw, 360px) !important;
+    min-width: min(88vw, 360px) !important;
+  }
+  [data-testid="stSidebarContent"] {
+    padding: 1rem 1rem 2rem;
+  }
+  /* 多列一律堆叠为单列，杜绝挤压截断 */
+  [data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap !important;
+    row-gap: 0.6rem;
+  }
+  [data-testid="stHorizontalBlock"] > div {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  [data-testid="stMetric"] {
+    padding: 12px 14px !important;
+  }
+  [data-testid="stMetricValue"] {
+    font-size: 19px !important;
+  }
+  [data-testid="stMetricLabel"] p {
+    font-size: 12px !important;
+  }
+  .sec-title {
+    font-size: 17px !important;
+  }
+  .sec-note {
+    font-size: 12px !important;
+    line-height: 1.6;
+  }
+  /* 表格：允许触摸横向滚动，且不撑破页面 */
+  [data-testid="stDataFrame"] {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+  [data-testid="stDataFrame"] > div {
+    min-width: 0 !important;
+  }
+  /* 单选/横向控件在小屏允许换行 */
+  .stRadio [role="radiogroup"] {
+    flex-wrap: wrap;
+  }
+  /* 图表容器宽度不超过视口 */
+  [data-testid="stPlotlyChart"] {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  [data-testid="stPlotlyChart"] > div {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
