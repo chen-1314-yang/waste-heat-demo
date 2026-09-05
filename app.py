@@ -469,6 +469,53 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
     width: 100% !important;
     min-width: 0 !important;
   }
+  /* 侧栏开关按钮改造（手机“两页”切换）：
+     左上角入口 = “场景参数”，侧栏内按钮 = “收起 · 查看结果” */
+  [data-testid="stExpandSidebarButton"] {
+    width: auto !important;
+    min-width: 104px !important;
+    height: 34px !important;
+    margin: 0 !important;
+    padding: 0 16px !important;
+    border-radius: 999px !important;
+    background: linear-gradient(92deg, #0EA5E9, #10B981) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: 0 4px 14px rgba(34, 211, 238, .30);
+  }
+  [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {
+    display: none !important;
+  }
+  [data-testid="stExpandSidebarButton"]::after {
+    content: "场景参数";
+    font-size: 14px;
+    font-weight: 800;
+    color: #06121F;
+    letter-spacing: 2px;
+    white-space: nowrap;
+  }
+  [data-testid="stSidebarCollapseButton"] {
+    width: auto !important;
+    height: 30px !important;
+    padding: 0 12px !important;
+    border-radius: 999px !important;
+    background: rgba(34, 211, 238, .14) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"] {
+    display: none !important;
+  }
+  [data-testid="stSidebarCollapseButton"]::after {
+    content: "收起 · 查看结果";
+    font-size: 13px;
+    font-weight: 700;
+    color: #A5F3FC;
+    letter-spacing: .5px;
+    white-space: nowrap;
+  }
 }
 </style>
 """, unsafe_allow_html=True)
