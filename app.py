@@ -14,11 +14,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+# P3：两级决策统一内核（decision_core v2/P2 标定版）＋ 纯逻辑适配层
+import decision_core as dc
+import decision_v2_ui as v2u
+
 st.set_page_config(page_title="工业余热回收智能决策演示平台", layout="wide",
                    initial_sidebar_state="expanded")
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(DIR, "data")
+dc.set_data_dir(DATA)  # 内核读本地 orc/steam 仿真数据与 eval_weights（部署版同样适用）
 
 # 排放因子口径（2021年度全国电网平均排放因子，生态环境部 2022-03 发布，
 # 环办气候函〔2022〕111号；0.5810 不是华东区域因子，勿误标）
@@ -95,7 +100,8 @@ def load_weights(_t=None):
         return json.load(f)
 
 
-DEMAND_OPTIONS = ["发电", "工艺蒸汽", "供暖/热水", "储热调峰"]
+DEMAND_OPTIONS = ["发电", "工艺蒸汽", "供暖/热水", "储热调峰",
+                  "供冷（制冷）", "干燥/烘干"]
 FLOW_PROFILES = ["平稳波动", "班次阶跃", "随机游走"]
 NAV_ITEMS = ["手动设定", "典型工况", "实时模拟"]
 
@@ -356,34 +362,12 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------
-# 路径库与指标（与正式版一致）
+# 决策指标与权重映射（路径库/第一级规则/矩阵值统一来自 decision_core v2，
+# 见 decision_v2_ui.py 与 11_决策内核v2_全温域/，此处不再维护第二套 RAW）
 # ---------------------------------------------------------------
-PATH_NAMES = [
-    "直接换热供暖", "余热锅炉直接产汽", "吸收式热泵提温", "压缩式热泵提温",
-    "ORC 余热发电", "高温蒸汽发电", "热化学储热", "相变储热", "TEG 热电发电",
-]
 INDICATORS = ["能效%", "投资万元/MW", "回收期年", "CO2减排t/年", "政策分",
               "运行成本万元/MW·年"]
 DIRECTIONS = ["max", "min", "min", "max", "max", "min"]
-RAW = {
-    # 列含义：[能效%(仿真/文献参考), 投资万元/MW(文献/工程估算), 回收期年(文献/工程估算),
-    #          CO2减排t/年(推算,运行时覆盖), 政策分(按发改委支持目录规则打分),
-    #          运行成本万元/MW·年(压缩式=公式推算,其余=工程估算)]
-    # 能效：压缩式=COP2.8×电网效率38%≈106%(一次能源口径)；吸收式=余热自驱动 COP0.75；
-    #       直接换热/余热锅炉=热回收率；ORC=仿真中位效率。
-    # 投资/回收期：ORC=《重庆大学学报》2019(23800元/kW、5.58年)；压缩式/吸收式=李萌《基于余热
-    #       回收用的热泵技术对比研究》(同一对比口径：压缩式4.23年、吸收式2.73年；投资为工程估算)；
-    #       直接换热/余热锅炉=工程估算；储热/TEG=示意。政策分规则见《数据来源台账》。
-    "直接换热供暖":   [90,  60, 2.5, 0, 3, 6],
-    "余热锅炉直接产汽": [85, 100, 3.5, 0, 3, 12],
-    "吸收式热泵提温": [75, 150, 2.7, 0, 4, 20],
-    "压缩式热泵提温": [106, 120, 4.2, 0, 4, 186],
-    "ORC 余热发电":  [12.3, 2380, 5.6, 0, 4, 15],
-    "高温蒸汽发电":  [25, 550, 4.5, 0, 4, 8],
-    "热化学储热":    [70, 900, 10.0, 0, 3, 28],
-    "相变储热":      [75, 600, 8.0, 0, 3, 25],
-    "TEG 热电发电":  [5, 1500, 12.0, 0, 2, 8],
-}
 MAP_TO_TOPSIS = {
     "能效%": "系统能效", "投资万元/MW": "初始投资", "回收期年": "投资回收期",
     "CO2减排t/年": "CO2当量减排", "政策分": "政策补贴适配度",
@@ -434,6 +418,9 @@ def combined_weights(lam, X=None):
 
 
 def topsis(matrix, weights):
+    # 单候选：贴近度按约定为 1（唯一可行路径即最优），避免页面显示 0.000
+    if matrix.shape[0] == 1:
+        return np.ones(1)
     # 防除零：全 0 / 零方差列（如减排列无区分度时）归一化不产生 nan
     norm = matrix / np.sqrt((matrix ** 2).sum(axis=0) + 1e-12)
     v = norm * weights
@@ -448,115 +435,12 @@ def topsis(matrix, weights):
     return d_neg / (d_pos + d_neg + 1e-12)
 
 
-def build_matrix(survivors, t_src, m_dot, medium, hours, dT):
-    """构建 TOPSIS 决策矩阵：减排列/运行成本按当前参数动态推算（主表与 λ 敏感性共用）。"""
-    X = np.array([RAW[p] for p in survivors], dtype=float)
-    for i, p in enumerate(survivors):
-        if p == "ORC 余热发电":
-            r = orc_reduction(t_src, m_dot, medium, hours, dT)
-            if r:
-                X[i, 3] = round(r["co2"], 1)
-        elif p == "高温蒸汽发电":
-            r = steam_reduction(t_src, m_dot, medium, hours, dT)
-            if r:
-                X[i, 3] = round(r["co2"], 1)
-        elif p == "压缩式热泵提温":
-            # 运行成本随当前运行小时联动：0.357 MW电/MW热 × hours × 0.65 元/kWh
-            # 减排列必须扣除压缩式热泵自身耗电排放（COP 2.8 × 电网因子），
-            # 不能与直接换热/吸收式共用"替代天然气"口径（否则高估约 13 倍）
-            X[i, 3] = round(heat_reduction(t_src, m_dot, medium, hours, dT,
-                                           cop=HP_COP)["co2"], 1)
-            X[i, 5] = round(0.357 * hours * 0.65 * 1000 / 10000, 1)
-        elif p in ("吸收式热泵提温", "直接换热供暖",
-                   "余热锅炉直接产汽", "热化学储热", "相变储热"):
-            r = heat_reduction(t_src, m_dot, medium, hours, dT)
-            if r:
-                X[i, 3] = round(r["co2"], 1)
-    return X
-
-
-def stage1(t_src, demand, continuity, t_steam=152):
-    keep, reasons = {}, {}
-
-    def excl(name, why):
-        keep[name] = False
-        reasons[name] = why
-
-    if demand == "发电":
-        keep["ORC 余热发电"] = 110 <= t_src <= 350
-        reasons["ORC 余热发电"] = (
-            f"热源 {t_src}℃ 在 ORC 适用区间（110~350℃，文献）" if 110 <= t_src <= 350
-            else (f"热源 {t_src}℃ 低于 ORC 驱动下限 110℃"
-                  if t_src < 110 else
-                  f"热源 {t_src}℃ 超过 ORC 常规上限 350℃，建议蒸汽朗肯发电"))
-        keep["高温蒸汽发电"] = t_src >= 250
-        reasons["高温蒸汽发电"] = (
-            f"热源 {t_src}℃ ≥250℃，可用蒸汽朗肯循环发电（高温余热标准路线）"
-            if t_src >= 250 else
-            f"热源 {t_src}℃ 低于 250℃，蒸汽朗肯循环经济性不足（建议 ORC）")
-        keep["TEG 热电发电"] = t_src >= 40
-        reasons["TEG 热电发电"] = "TEG 适合 40℃ 以上温差发电（兜底候选）" if t_src >= 40 \
-            else "热源温度过低，TEG 温差不足"
-        for p in ["直接换热供暖", "余热锅炉直接产汽", "吸收式热泵提温",
-                  "压缩式热泵提温", "热化学储热", "相变储热"]:
-            excl(p, "需求为发电：该路径不产出电力")
-    elif demand == "工艺蒸汽":
-        keep["余热锅炉直接产汽"] = t_src >= t_steam + 20
-        reasons["余热锅炉直接产汽"] = (
-            f"热源 {t_src}℃ ≥ 蒸汽饱和温度 {t_steam}℃ + 端差 20℃，可直接产汽"
-            if t_src >= t_steam + 20 else
-            f"热源 {t_src}℃ 不足以产生 {t_steam}℃ 蒸汽（需 ≥{t_steam + 20}℃）")
-        keep["吸收式热泵提温"] = t_src >= 90
-        reasons["吸收式热泵提温"] = (
-            f"热源 {t_src}℃ 可驱动吸收式热泵（≥90℃）" if t_src >= 90
-            else "吸收式热泵需 ≥90℃ 驱动热源，当前温度不足")
-        keep["压缩式热泵提温"] = True
-        reasons["压缩式热泵提温"] = "压缩式热泵以电驱动，不受热源温度下限限制"
-        for p in ["直接换热供暖", "ORC 余热发电", "高温蒸汽发电", "TEG 热电发电",
-                  "热化学储热", "相变储热"]:
-            excl(p, "需求为工艺蒸汽：该路径不产出蒸汽")
-    elif demand == "供暖/热水":
-        keep["直接换热供暖"] = t_src >= 60
-        reasons["直接换热供暖"] = "直接换热适用 60℃ 以上热源" if t_src >= 60 \
-            else "热源低于 60℃，直接换热效率过低"
-        keep["吸收式热泵提温"] = t_src >= 90
-        reasons["吸收式热泵提温"] = "热源 ≥90℃ 时可驱动吸收式热泵" if t_src >= 90 \
-            else "吸收式热泵需 ≥90℃ 驱动热源"
-        keep["压缩式热泵提温"] = True
-        reasons["压缩式热泵提温"] = "压缩式热泵以电驱动，适用低温余热提温"
-        for p in ["余热锅炉直接产汽", "ORC 余热发电", "高温蒸汽发电", "TEG 热电发电",
-                  "热化学储热", "相变储热"]:
-            excl(p, "需求为供暖/热水：该路径不直接产热")
-    else:
-        keep["热化学储热"] = True
-        reasons["热化学储热"] = "储热路径可跨时段调峰"
-        keep["相变储热"] = True
-        reasons["相变储热"] = "储热路径可跨时段调峰"
-        keep["直接换热供暖"] = t_src >= 60
-        reasons["直接换热供暖"] = "供暖需求场景候选" if t_src >= 60 else "热源温度过低"
-        keep["吸收式热泵提温"] = t_src >= 90
-        reasons["吸收式热泵提温"] = "提温需求候选" if t_src >= 90 else "驱动热源不足"
-        keep["压缩式热泵提温"] = True
-        reasons["压缩式热泵提温"] = "提温需求候选"
-        keep["ORC 余热发电"] = 110 <= t_src <= 350
-        reasons["ORC 余热发电"] = ("发电调峰候选" if 110 <= t_src <= 350
-                                   else "超出 ORC 适用区间（110~350℃）")
-        keep["高温蒸汽发电"] = t_src >= 250
-        reasons["高温蒸汽发电"] = "发电调峰候选" if t_src >= 250 else "驱动温度不足"
-        keep["TEG 热电发电"] = t_src >= 40
-        reasons["TEG 热电发电"] = "发电兜底候选" if t_src >= 40 else "温差不足"
-        keep["余热锅炉直接产汽"] = t_src >= t_steam + 20
-        reasons["余热锅炉直接产汽"] = "产汽候选" if t_src >= t_steam + 20 \
-            else f"热源不足以直接产 {t_steam}℃ 蒸汽"
-
-    if continuity == "连续":
-        for p in ["热化学储热", "相变储热"]:
-            if keep.get(p, True):
-                reasons[p] = "热源连续：储热非必需（保留作调峰候选）"
-    for p in PATH_NAMES:
-        keep.setdefault(p, True)
-        reasons.setdefault(p, "通过第一级筛选")
-    return keep, reasons
+def run_v2_decision(t_src, m_dot, medium, demand, continuity, hours, dT,
+                    driver):
+    """调用统一内核（decision_v2_ui → decision_core）：主表与 λ 敏感性共用。"""
+    scene = v2u.ui_scene(t_src, m_dot, medium, demand, continuity,
+                         hours, dT, driver=driver)
+    return v2u.run_decision(scene)
 
 
 def _recovered_heat_kw(m_dot, medium, t_src, dT):
@@ -567,26 +451,28 @@ def _recovered_heat_kw(m_dot, medium, t_src, dT):
 
 
 def orc_reduction(t_src, m_dot, medium, hours, dT):
-    """ORC 发电减排：每 MW 回收热净功率 × 实际回收热功率（ṁ×cp×ΔT）折算年发电量。"""
+    """ORC 发电减排：P50 统一取 decision_core 中位热效率（与决策矩阵同源）。"""
     sweep = load_sweep(_mtime("orc_sweep_coolprop.csv"))
     tmax_k = t_src + 273.15 - dT
     ok = sweep[sweep["heater_outlet_K"] <= tmax_k]
     if len(ok) == 0:
         return None
     effs = ok["thermal_eff"].values
-    p10, p50, p90 = np.percentile(effs, [10, 50, 90])
+    p10, p90 = np.percentile(effs, [10, 90])
+    eff50_pct = dc.orc_eff_median_pct(t_src, dT)
+    p50_kw_per_mw = eff50_pct * 10.0 if eff50_pct else np.percentile(effs * 1000.0, 50)
     q_kw = _recovered_heat_kw(m_dot, medium, t_src, dT)
-    net_abs = np.percentile(effs * 1000.0, 50) * q_kw / 1000.0
+    net_abs = p50_kw_per_mw * q_kw / 1000.0
     mwh = net_abs * hours / 1000.0
     co2 = mwh * GRID_EF
     money = mwh * 1000 * 0.65 / 10000.0
-    return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50 * 1000.0,
+    return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50_kw_per_mw,
             "p90": p90 * 1000.0, "q_kw": q_kw, "net_abs_kW": net_abs,
             "mwh": mwh, "co2": co2, "money": money}
 
 
 def steam_reduction(t_src, m_dot, medium, hours, dT):
-    """高温蒸汽朗肯发电：每 MW 回收热净功率 × 实际回收热功率折算年发电量。"""
+    """高温蒸汽朗肯发电：P50 统一取 decision_core 插值效率（与决策矩阵同源）。"""
     sweep = load_steam_sweep(_mtime("steam_sweep_coolprop.csv"))
     # 热源温度 → 锅炉出口蒸汽温度：取 ~100℃ 端差，封顶 540℃（材料限制）
     t_boiler = min(max(t_src - 100.0, 180.0), 540.0) + 273.15
@@ -594,13 +480,15 @@ def steam_reduction(t_src, m_dot, medium, hours, dT):
     if len(ok) == 0:
         return None
     effs = ok["thermal_eff"].values
-    p10, p50, p90 = np.percentile(effs, [10, 50, 90])
+    p10, p90 = np.percentile(effs, [10, 90])
+    eff50_pct = dc.steam_eff_median_pct(t_src)
+    p50_kw_per_mw = eff50_pct * 10.0 if eff50_pct else np.percentile(effs * 1000.0, 50)
     q_kw = _recovered_heat_kw(m_dot, medium, t_src, dT)
-    net_abs = np.percentile(effs * 1000.0, 50) * q_kw / 1000.0
+    net_abs = p50_kw_per_mw * q_kw / 1000.0
     mwh = net_abs * hours / 1000.0
     co2 = mwh * GRID_EF
     money = mwh * 1000 * 0.65 / 10000.0
-    return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50 * 1000.0,
+    return {"n_cond": len(ok), "p10": p10 * 1000.0, "p50": p50_kw_per_mw,
             "p90": p90 * 1000.0, "q_kw": q_kw, "net_abs_kW": net_abs,
             "mwh": mwh, "co2": co2, "money": money}
 
@@ -672,11 +560,18 @@ def style_topsis_table(df):
 
 
 PATH_COLORS = {
-    "直接换热供暖": "#22D3EE", "余热锅炉直接产汽": "#38BDF8",
-    "吸收式热泵提温": "#34D399", "压缩式热泵提温": "#2DD4BF",
-    "ORC 余热发电": "#4ADE80", "高温蒸汽发电": "#FB923C",
-    "热化学储热": "#A3E635",
-    "相变储热": "#FBBF24", "TEG 热电发电": "#F472B6",
+    v2u.LABELS["direct"]: "#22D3EE",
+    v2u.LABELS["whb_steam"]: "#38BDF8",
+    v2u.LABELS["abs_self"]: "#34D399",
+    v2u.LABELS["abs_ext"]: "#A78BFA",
+    v2u.LABELS["comp"]: "#2DD4BF",
+    v2u.LABELS["orc"]: "#4ADE80",
+    v2u.LABELS["steam_pp"]: "#FB923C",
+    v2u.LABELS["tc_storage"]: "#A3E635",
+    v2u.LABELS["pcm_storage"]: "#FBBF24",
+    v2u.LABELS["teg"]: "#F472B6",
+    v2u.LABELS["abs_cool"]: "#38BDF8",
+    v2u.LABELS["comp_cool"]: "#818CF8",
 }
 
 
@@ -1058,8 +953,23 @@ with st.sidebar:
             row = conditions[conditions["工况名称"] == preset].iloc[0]
             t_src = float(row["热源温度_℃"])
             m_dot = float(row["热源流量_kg_s"])
+            # 与实时模拟分支一致：选中工况即同步需求/连续性/年运行小时，
+            # 避免只改温度流量、仍按旧“用能需求”推荐造成误导
+            demand_ui = str(row["用能需求"])
+            if demand_ui in DEMAND_OPTIONS:
+                st.session_state["demand_val"] = demand_ui
+            cont_ui = str(row["热源连续性"])
+            if cont_ui in ["连续", "间歇"]:
+                st.session_state["continuity_val"] = cont_ui
+            try:
+                h_ui = int(float(row["年运行小时"]))
+                if 4000 <= h_ui <= 8000:
+                    st.session_state["hours_val"] = h_ui
+            except (TypeError, ValueError):
+                pass
             st.caption(
                 f"{row['行业']} · {row['热源类型']} · 来源：{row['数据来源']}"
+                + f" · 需求：{row['用能需求']} · 连续性：{row['热源连续性']}"
                 + (f" · {row['说明']}" if row["说明"] else ""))
     else:
         st.session_state.setdefault(
@@ -1124,6 +1034,13 @@ with st.sidebar:
     hours = st.slider("年运行小时 (h)", 4000, 8000, 8000, 500, key="hours_val")
     dT = st.slider("换热端差 (℃)", 5, 20, 10, 1)
     medium = st.selectbox("热介质（供热估算用）", ["热水/冷凝水", "烟气", "工艺液体"])
+    driver = st.radio("驱动来源", v2u.DRIVER_OPTIONS, horizontal=True,
+                      index=0,
+                      help="外购蒸汽：供暖/热水场景启用蒸汽驱动吸收式热泵（abs_ext）；"
+                           "外购电力：压缩式热泵/电压缩制冷按电驱动口径评价；"
+                           "供冷场景严格区分驱动来源（余热自驱动→吸收式制冷、"
+                           "外购电力→电压缩制冷、外购蒸汽→不设废热回收路径）",
+                      key="driver_val")
     st.markdown('<div class="side-sec">评价权重</div>', unsafe_allow_html=True)
     lam = st.slider("组合权重 λ（主观占比）", 0.0, 1.0, 0.5, 0.05)
     st.caption("λ=主观(AHP)占比；1−λ=客观(熵权)占比")
@@ -1213,23 +1130,35 @@ def render_dashboard():
         st.caption("手动设定：自由输入热源温度与流量，即时输出两级决策与降碳核算结果")
     elif data_mode == "典型工况":
         st.caption("典型工况：从工况库选择真实场景，一键查看推荐路径与核算结果")
-    keep, reasons = stage1(t_src, demand, continuity)
-    survivors = [p for p in PATH_NAMES if keep[p]]
+    res = run_v2_decision(t_src, m_dot, medium, demand, continuity,
+                          hours, dT, driver)
+    keys = res["keys"]
+    survivors = res["labels"]
+    X = res["X"]
 
-    st.markdown('<div class="sec-title"><span class="tag">01</span>第一级 · 热力学规则粗筛</div>',
-                unsafe_allow_html=True)
-    rows = [{"路径": p, "结果": "✓ 通过" if keep[p] else "✗ 排除", "原因": reasons[p]}
-            for p in PATH_NAMES]
-    st.dataframe(style_stage_table(pd.DataFrame(rows)), width="stretch",
-                 hide_index=True)
-    st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
+    st.markdown('<div class="sec-title"><span class="tag">01</span>第一级 · 热力学规则粗筛'
+                '（统一内核 v2）</div>', unsafe_allow_html=True)
+    if res["out_of_scope"]:
+        st.warning("⚠ 能力圈外 / 无可行候选：" + res["message"])
+        st.caption("红线（v2.1）：供冷/干燥为受支持需求；除湿未单列（并入供冷/干燥场景后评价）；"
+                   "外购蒸汽驱动吸收式制冷不设废热回收路径；"
+                   ">650℃ 发电/产汽需多压/再热锅炉专项设计，模型不做硬推荐（设计文档 §0/§9）。")
+    else:
+        rows = [{"路径": v2u.LABELS[k],
+                 "结果": "✓ 通过" if k in keys else "✗ 排除",
+                 "原因": res["reasons"][k]} for k in dc.PATH_KEYS]
+        st.dataframe(style_stage_table(pd.DataFrame(rows)), width="stretch",
+                     hide_index=True)
+        st.info(f"进入第二级候选：{'、'.join(survivors) if survivors else '无（请调整场景参数）'}")
+        # C3.2（2026-09-05）：S2 型边界工况自动提示（预留端差裕量）
+        for note in v2u.boundary_notices(res):
+            st.warning(note)
 
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序</div>',
-                unsafe_allow_html=True)
-    if survivors:
-        X = build_matrix(survivors, t_src, m_dot, medium, hours, dT)
+    st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序'
+                '（λ=AHP×熵权组合赋权）</div>', unsafe_allow_html=True)
+    if keys:
         w5 = combined_weights(lam, X)
         c = topsis(X, w5)
         df_r = pd.DataFrame({
@@ -1250,38 +1179,44 @@ def render_dashboard():
         st.markdown(
             f'<div class="rec-banner">推荐路径：<b>{df_r.iloc[0]["路径"]}</b>'
             f'<span class="muted">　贴近度 {df_r.iloc[0]["TOPSIS贴近度"]:.3f} · λ={lam:.2f}'
-            f' · 权重来自 AHP+熵权组合赋权</span></div>',
+            f' · 驱动={driver} · 权重来自 AHP+熵权组合赋权</span></div>',
             unsafe_allow_html=True)
         if float(c.max()) >= 0.9995:
             st.caption("贴近度≈1.000 说明该路径在**全部指标上占优**（正理想解距离 d⁺≈0），"
                        "是数学结果而非写死；请结合第 2/3 名与贴近度差距判断稳健性。")
-        st.caption("数据口径：能效列中 ORC 为 CoolProp 物性模型设计点热效率（约 12%~15%），"
-                   "高温蒸汽发电按文献效率 25%（高温段 25%~38%）；压缩式热泵为一次能源效率"
-                   "（COP2.8×电网效率38%≈106%），吸收式热泵为余热自驱动 COP0.75，直接换热/余热锅炉为热回收率；"
-                   "减排列按当前参数推算（发电=替代购电；供热=替代天然气；压缩式热泵另扣自身耗电排放），可复算；"
-                   "**投资/回收期**：ORC 引自《重庆大学学报》"
-                   "(23800元/kW、5.58年)，压缩式与吸收式热泵的回收期引自同一对比研究"
-                   "（李萌：4.23年/2.73年），投资为工程估算（大庆改造案例 627万/14.4MW 为特例，见案例对标），"
-                   "直接换热/余热锅炉为工程估算，储热与 TEG 为示意；**运行成本**：压缩式按 COP2.8 反推耗电"
-                   "×当前运行小时×0.65元/kWh 动态推算，其余为工程估算；**政策分**按《节能降碳中央预算内投资专项管理办法》"
-                   "与《绿色低碳转型产业指导目录(2024年版)》收录情况打分，详见《数据来源台账》；"
+        st.caption("数据口径（统一内核 v2/P2）：路径规则/矩阵来自 decision_core；"
+                   "ORC/蒸汽朗肯能效为 CoolProp 真值（ORC 累计中位数、蒸汽朗肯按锅炉出口温度插值）；"
+                   "吸收式按需求拆分：供暖/储热=一类 COP1.7、工艺蒸汽=二类 COP0.45、"
+                   "外购蒸汽驱动=COP_h1.7；**供冷/干燥（v2.1）**：吸收式制冷 COP_c 分段"
+                   "（≥85℃ 0.7、80~84℃ 0.6，出处见 11/calibration 台账）、电压缩制冷 "
+                   "COP_e=5.0（GB19577-2015 水冷式 3 级下限）、干燥按供热语义映射"
+                   "（直接换热/产汽/热泵），除湿未单列并入供冷/干燥；"
+                   "压缩式能效为一次能源效率（COP2.8×电网38%≈106%）；"
+                   "减排列按当前参数推算（发电=替代购电；供热=替代天然气；压缩式另扣自身耗电；"
+                   "吸收式制冷=替代电压缩电耗、电压缩制冷减排列记 0；"
+                   "外购蒸汽吸收式扣驱动蒸汽燃料），可复算；"
+                   "**投资/回收期**：ORC 引自《重庆大学学报》(23800元/kW、5.58年)；"
+                   "吸收式外购蒸汽档按哈石化余热暖民（1.26 亿元/72.3 MW、回收期 4.2 年）；"
+                   "吸收式/电压缩制冷的投资与回收期为工程估算 [待标定]（见 C2 台账）；"
+                   "其余为工程估算/同一对比研究（李萌），详见《数据来源台账》与 11 目录 calibration；"
                    "主观权重 AHP 为演示假设（需专家打分），客观熵权随当前候选矩阵动态计算。")
         csv = df_r.to_csv(index=False, encoding="utf-8-sig")
         st.download_button("下载排序结果 CSV", data=csv,
                            file_name="两级决策_演示结果.csv", mime="text/csv")
-    else:
-        st.warning("无候选路径，请调整参数")
 
     st.divider()
 
     st.markdown('<div class="sec-title"><span class="tag">03</span>减碳与收益估算（推算口径，非实测）</div>',
                 unsafe_allow_html=True)
-    orc = orc_reduction(t_src, m_dot, medium, hours, dT) if demand in (
-        "发电", "储热调峰") else None
-    heat = heat_reduction(t_src, m_dot, medium, hours, dT) if demand in (
-        "工艺蒸汽", "供暖/热水", "储热调峰") else None
-    hp = heat_reduction(t_src, m_dot, medium, hours, dT, cop=HP_COP) if demand in (
-        "工艺蒸汽", "供暖/热水", "储热调峰") else None
+    decision_ok = not res["out_of_scope"]
+    orc = (orc_reduction(t_src, m_dot, medium, hours, dT) if demand in (
+        "发电", "储热调峰") else None) if decision_ok else None
+    heat = (heat_reduction(t_src, m_dot, medium, hours, dT) if demand in (
+        "工艺蒸汽", "供暖/热水", "储热调峰", "干燥/烘干") else None) \
+        if decision_ok else None
+    hp = (heat_reduction(t_src, m_dot, medium, hours, dT, cop=HP_COP)
+          if demand in ("工艺蒸汽", "供暖/热水", "储热调峰", "干燥/烘干")
+          else None) if decision_ok else None
     top_path = df_r.iloc[0]["路径"] if survivors else None
 
     c1, c2, c3, c4 = st.columns(4)
@@ -1294,7 +1229,39 @@ def render_dashboard():
                   f"{orc['mwh']:.0f} MWh × 0.581")
         c4.metric("年节省电费（演示价 0.65 元/kWh）", f"{orc['money']:.1f} 万元",
                   "按替代购电口径")
-    elif top_path == "压缩式热泵提温" and hp is not None:
+    elif top_path == v2u.LABELS["abs_cool"]:
+        s2 = res["scene"]
+        q = dc.recovered_heat_kw(s2)
+        cop = dc.abs_cool_cop(s2["热源温度_degC"]) or dc.COP_C_ABS
+        q_cold = cop * q
+        mwh = q_cold / dc.COP_E_COOL * s2["年运行小时"] / 1000.0
+        red = mwh * dc.GRID_EF
+        c1.metric("服务冷量（估算）", f"{q_cold:.0f} kW",
+                  f"COP_c={cop:.2f} × 回收热 {q:.0f} kW")
+        c2.metric("年制冷量（推算）", f"{q_cold * s2['年运行小时'] / 1000.0:.0f} MWh",
+                  f"{s2['年运行小时']} h/年")
+        c3.metric("替代电耗（推算）", f"{mwh / 10.0:.1f} 万kWh",
+                  f"÷ COP_e={dc.COP_E_COOL:.1f}（GB19577 3级）")
+        c4.metric("年降碳（推算）", f"{red:.1f} tCO2",
+                  f"{mwh:.0f} MWh × 0.581")
+        st.caption("吸收式制冷口径：废热为弃热不扣驱动排放；年节省电费（演示价 0.65 元/kWh）≈ "
+                   f"{mwh * 0.065:.1f} 万元；辅机/泵运行成本约 3 万元/MW·年 [待标定]。"
+                   "投资/回收期为工程估算，正式核算须以机组选型报价为准。")
+    elif top_path == v2u.LABELS["comp_cool"]:
+        s2 = res["scene"]
+        c1.metric("电压缩制冷 COP_e", f"{dc.COP_E_COOL:.1f}",
+                  "GB19577-2015 水冷式 3 级下限（保守取）")
+        c2.metric("一次能源效率（演示口径）", f"{dc.COP_E_COOL * 0.38 * 100.0:.0f}%",
+                  "COP_e × 电网发电效率 38%")
+        c3.metric("耗电强度", f"{1000.0 / dc.COP_E_COOL:.0f} kW电/MW冷",
+                  "按 1 MW 冷量服务计")
+        c4.metric("年运行成本（电费演示价）",
+                  f"{dc.comp_cool_opex_wan_mw(s2):.1f} 万元/MW·年",
+                  f"减排 0：与电制冷现状同口径（{s2['年运行小时']} h/年）")
+        st.caption("电压缩制冷是“无废热可用”时的基准方案：不假装比自身更低碳；"
+                   "若要与吸收式制冷比较同一冷负荷，需按负荷口径核算（C2 待办），"
+                   "本面板为 1 MW 冷量服务强度的演示口径。")
+    elif top_path == v2u.LABELS["comp"] and hp is not None:
         c1.metric("回收热功率（估算）", f"{hp['q_kw']:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
         c2.metric("年回收热量", f"{hp['heat_gj']:.0f} GJ", f"{hours} h/年")
         c3.metric("年降碳（净：替代天然气−耗电）", f"{hp['co2']:.1f} tCO2",
@@ -1302,6 +1269,16 @@ def render_dashboard():
                   f"（COP {HP_COP}，{GRID_EF_LABEL}）")
         c4.metric("年净节省（燃气费−电费，演示价）", f"{hp['money']:.1f} 万元",
                   "按替代天然气、0.65 元/kWh 演示价")
+    elif top_path == v2u.LABELS["abs_ext"]:
+        s2 = res["scene"]
+        q = dc.recovered_heat_kw(s2)
+        c1.metric("回收热功率（估算）", f"{q:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
+        c2.metric("运行成本（外购蒸汽驱动）", f"{dc.steam_driven_abs_opex_wan_mw(s2):.1f} 万元/年",
+                  "=(1/COP_h)×hours×3.6×100元/GJ÷1e4×1.03")
+        c3.metric("年降碳（净：替代天然气−驱动蒸汽）",
+                  f"{dc.steam_driven_abs_reduction(s2):.1f} tCO2",
+                  f"COP_h={dc.COP_H_ABS_EXT} 口径")
+        c4.metric("—", "—", "外购蒸汽驱动吸收式（哈石化余热暖民同型）")
     elif heat is not None:
         c1.metric("回收热功率（估算）", f"{heat['q_kw']:.0f} kW", f"ṁ={m_dot} kg/s × cp×ΔT")
         c2.metric("年回收热量", f"{heat['heat_gj']:.0f} GJ", f"{hours} h/年")
@@ -1311,8 +1288,77 @@ def render_dashboard():
     else:
         for cc in (c1, c2, c3, c4):
             cc.metric("—", "—", "无可用估算")
-    steam = steam_reduction(t_src, m_dot, medium, hours, dT) if demand in (
-        "发电", "储热调峰") else None
+    if demand == "供冷（制冷）" and decision_ok and res["scene"] is not None:
+        with st.expander("制冷方式对比（同一冷负荷口径：每 1 MW 冷量服务 · 演示）"):
+            s2 = res["scene"]
+            h_run = s2["年运行小时"]
+            cop_c = dc.abs_cool_cop(s2["热源温度_degC"])
+            cop_c_txt = (f"{cop_c:.2f}" if cop_c else "—")
+            heat_drive_txt = (
+                f"{1.0 / cop_c:.2f} MW热（废热，弃热免费）" if cop_c
+                else "不可行（热源 <80℃）")
+            elec_mwh_per_mw = (1.0 / dc.COP_E_COOL) * h_run
+            red_per_mw = elec_mwh_per_mw * dc.GRID_EF
+            comp_cost = dc.comp_cool_opex_wan_mw(s2)
+            # C2.1 口径强化（2026-09-05）：投资/回收期显式入表并按年运行小时动态计算，
+            # 区分“新建/扩容增量回收期”与“存量改造全投资回收期”，避免数字被脱离口径引用。
+            abs_inv = float(dc.BASE_INDICATORS["abs_cool"][1])    # 100 万元/MW冷 [待标定]
+            comp_inv = float(dc.BASE_INDICATORS["comp_cool"][1])  # 60 万元/MW冷 [待标定]
+            abs_aux = float(dc.BASE_INDICATORS["abs_cool"][5])    # 3 万元/MW·年（辅机）[待标定]
+            inc_saving = comp_cost - abs_aux
+            inc_extra = abs_inv - comp_inv
+            pb_ok = cop_c is not None and inc_saving > 0
+            inc_pb_txt = (f"≈{inc_extra / inc_saving:.1f} 年" if pb_ok
+                          else "—（热源<80℃ 或节费≤辅机成本）")
+            allin_pb_txt = (f"≈{abs_inv / inc_saving:.1f} 年" if pb_ok else "—")
+            rows = [
+                {"指标": "制冷 COP", "吸收式（余热驱动）": cop_c_txt,
+                 "电压缩制冷（现状基准）": f"{dc.COP_E_COOL:.1f}"},
+                {"指标": "驱动输入（每 MW 冷量）", "吸收式（余热驱动）": heat_drive_txt,
+                 "电压缩制冷（现状基准）":
+                     f"{1.0 / dc.COP_E_COOL:.3f} MW电"},
+                {"指标": f"年耗电（{h_run} h，演示）",
+                 "吸收式（余热驱动）": "≈0（废热驱动；辅机另计）",
+                 "电压缩制冷（现状基准）":
+                     f"{elec_mwh_per_mw / 10.0:.0f} 万kWh"},
+                {"指标": "投资（万元/MW冷，[待标定]）",
+                 "吸收式（余热驱动）": f"≈{abs_inv:.0f}（机组+换热/管网）",
+                 "电压缩制冷（现状基准）": f"≈{comp_inv:.0f}（国产机组价上沿）"},
+                {"指标": "年运行成本（演示价 0.65 元/kWh）",
+                 "吸收式（余热驱动）":
+                     f"≈{abs_aux:.0f} 万元/MW·年（辅机）[待标定]",
+                 "电压缩制冷（现状基准）": f"≈{comp_cost:.0f} 万元/MW·年"},
+                {"指标": f"增量回收期·新建/扩容（相对电压缩，{h_run} h/年）",
+                 "吸收式（余热驱动）": inc_pb_txt,
+                 "电压缩制冷（现状基准）": "—（基准方案）"},
+                {"指标": f"全投资回收期·存量改造（电制冷为沉没成本，{h_run} h/年）",
+                 "吸收式（余热驱动）": allin_pb_txt,
+                 "电压缩制冷（现状基准）": "—（基准方案）"},
+                {"指标": "相对“全用电压缩”的年减排",
+                 "吸收式（余热驱动）": f"≈{red_per_mw:.0f} tCO2/MW冷·年",
+                 "电压缩制冷（现状基准）": "0（同口径基准）"},
+            ]
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            st.caption(
+                "口径说明：① 本面板按 1 MW 冷量服务、台账基值（未按场景规模摊薄）演示；"
+                "吸收式替代电压缩所避免的电耗只取决于冷量服务与 COP_e，与 COP_c 无关"
+                "（COP_c 决定所需废热量）；减排按 "
+                f"{dc.GRID_EF} tCO2/MWh（2021 全国电网平均因子）推算。"
+                "② 投资与回收期均为工程估算 [待标定]（11/calibration 台账 §3.2）："
+                "台账典型回收期 5.5/4.2 年是标定档位，非本面板推导值；本面板按"
+                "“相对电压缩的增量投资（新建/扩容）”与“存量改造全投资（电制冷视为"
+                f"沉没成本）”两种口径，绑定本场景年运行小时 {h_run} h 动态计算"
+                f"（电价 0.65 元/kWh、辅机 {abs_aux:.0f} 万元/MW·年）。"
+                "③ CAPEX 敏感性（2026-09-04，见 calibration/敏感性_C2.1_制冷CAPEX.md）："
+                "吸收式投资若按国际文献系统安装口径上探至 210~426 万元/MW，"
+                "8000 h 下增量回收期 0.7~3.6 年（电压缩取国产 60 或国际 81~141 "
+                "万元/MW 的全部组合均 <5.5 年）；"
+                "若年运行仅 4000 h 且吸收式取国际高位、电压缩按国产低位，最差约 7.5 年"
+                "——回收期必须绑定年运行小时与造价档位，不得单独引用。"
+                "④ 两列能效口径不同（COP_c×100 与 COP_e×电网效率 38%），不直接比较"
+                "能效列；若废热本身有市场价值，应按其机会成本另行折算。")
+    steam = (steam_reduction(t_src, m_dot, medium, hours, dT) if demand in (
+        "发电", "储热调峰") else None) if decision_ok else None
     if steam is not None:
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("蒸汽朗肯可行工况数", f"{steam['n_cond']}", "1600 工况中")
@@ -1325,7 +1371,9 @@ def render_dashboard():
     st.caption(f"说明：ORC/蒸汽发电数字基于 CoolProp 物性模型（净功率列按每 MW 回收热口径；"
                f"年发电量/降碳/电费按实际回收热功率 ṁ×cp×ΔT 折算，随流量实时变化；"
                f"电网因子采用{GRID_EF_LABEL}）；供热数字为替代天然气估算，其中压缩式热泵已扣耗电排放"
-               "（COP 2.8）；参数（电价/气价/锅炉效率）均为演示假设，正式核算须以项目实测为准。")
+               "（COP 2.8）；制冷数字为替代电压缩电耗口径（吸收式 COP_c 分段 × 回收热 ÷ COP_e 5.0），"
+               "电压缩制冷减排记 0（与现状同口径）；参数（电价/气价/锅炉效率/COP）均为演示/工程估算，"
+               "正式核算须以项目实测为准。")
 
     st.divider()
 
@@ -1360,7 +1408,7 @@ def render_dashboard():
                 unsafe_allow_html=True)
     lam_grid = np.linspace(0.0, 1.0, 11)
     if survivors:
-        X_lam = build_matrix(survivors, t_src, m_dot, medium, hours, dT)
+        X_lam = X  # 与上方 TOPSIS 表同一内核矩阵（decision_core v2）
         top1, top2, top3, c_top1 = [], [], [], []
         c_base = None
         for lam_t in lam_grid:
@@ -1423,7 +1471,13 @@ def render_dashboard():
             "设备制造排放 15.0 tCO2e 为工程估算（20 年摊销 0.75 t/年），全生命周期口径年净降碳约 572.4 t；\n"
             "4. **成本/回收期**：示意性代理模型，非真实报价；CCER 收益为情景假设，未完成备案方法学前不计入基准财务指标；\n"
             "5. 本平台全部代码与数据随申报材料提交，可复算、可溯源；\n"
-            "6. **方法边界**：当前两级决策为**单路径比选**版本；工业最佳实践中的梯级利用"
+            "6. **统一决策内核 v2（P3 接线）**：本页第一/二级规则与 03 案例回溯共用同一 "
+            "decision_core.py（全温域 25~650℃、12 条路径：热→热/电/冷/干燥四类转换、"
+            "含高温蒸汽发电、外购蒸汽驱动吸收式热泵，以及 v2.1 新增吸收式/电压缩制冷）；"
+            "**能力圈外不硬推荐**：>650℃ 的发电/产汽需多压/再热锅炉专项设计；"
+            "供冷/干燥为受支持需求，除湿未单列（并入供冷/干燥场景后评价），"
+            "外购蒸汽驱动吸收式制冷不设废热回收路径；\n"
+            "7. **方法边界**：本页为**单路径比选**版本；工业最佳实践中的梯级利用"
             "（高温段先发电/产汽、低温段再供热）已列入后续扩展，答辩按此口径说明。")
 
     st.markdown(
