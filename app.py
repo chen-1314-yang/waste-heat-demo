@@ -248,6 +248,9 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"] * {
   border-top: 1px solid var(--line); color: var(--muted); font-size: 12px;
   text-align: center; line-height: 1.8;
 }
+.mobile-swipe-hint {
+  display: none;
+}
 
 [data-testid="stVerticalBlockBorderWrapper"] {
   background: linear-gradient(180deg, rgba(34,211,238,.05), rgba(17,28,46,.72));
@@ -436,6 +439,21 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
   }
   [data-testid="stDataFrame"] > div {
     min-width: 0 !important;
+  }
+  /* Glide 数据网格滚动容器：确保横向触摸手势可被识别 */
+  [data-testid="stDataFrame"] .dvn-scroller {
+    touch-action: pan-x pan-y !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    overflow-x: auto !important;
+  }
+  /* 手机上显示“表格可左右滑动”提示 */
+  .mobile-swipe-hint {
+    display: block;
+    font-size: 11.5px;
+    color: #7DD3FC;
+    margin: 2px 0 6px;
+    letter-spacing: .3px;
   }
   /* 单选/横向控件在小屏允许换行 */
   .stRadio [role="radiogroup"] {
@@ -1238,6 +1256,8 @@ def render_dashboard():
                    "外购蒸汽驱动吸收式制冷不设废热回收路径；"
                    ">650℃ 发电/产汽需多压/再热锅炉专项设计，模型不做硬推荐（设计文档 §0/§9）。")
     else:
+        st.markdown('<div class="mobile-swipe-hint">↔ 表格较宽：在表格上左右滑动可查看完整列</div>',
+                    unsafe_allow_html=True)
         rows = [{"路径": v2u.LABELS[k],
                  "结果": "✓ 通过" if k in keys else "✗ 排除",
                  "原因": res["reasons"][k]} for k in dc.PATH_KEYS]
@@ -1253,6 +1273,8 @@ def render_dashboard():
     st.markdown('<div class="sec-title"><span class="tag">02</span>第二级 · TOPSIS 精细排序'
                 '（λ=AHP×熵权组合赋权）</div>', unsafe_allow_html=True)
     if keys:
+        st.markdown('<div class="mobile-swipe-hint">↔ 表格较宽：在表格上左右滑动可查看完整列</div>',
+                    unsafe_allow_html=True)
         w5 = combined_weights(lam, X)
         c = topsis(X, w5)
         df_r = pd.DataFrame({
