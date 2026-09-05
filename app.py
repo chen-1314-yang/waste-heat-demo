@@ -496,6 +496,7 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
     white-space: nowrap;
   }
   [data-testid="stSidebarCollapseButton"] {
+    position: relative !important;
     width: auto !important;
     height: 30px !important;
     padding: 0 12px !important;
@@ -504,9 +505,17 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
+    gap: 4px !important;
   }
   [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"] {
-    display: none !important;
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: transparent !important;
+    font-size: 26px !important;
+    z-index: 2 !important;
   }
   [data-testid="stSidebarCollapseButton"]::after {
     content: "收起 · 查看结果";
@@ -515,6 +524,9 @@ div[data-testid="stExpander"] summary { color: var(--text); font-weight: 600; }
     color: #A5F3FC;
     letter-spacing: .5px;
     white-space: nowrap;
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
   }
 }
 </style>
