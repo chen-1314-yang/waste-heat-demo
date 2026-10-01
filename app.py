@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components   # 2026-10-02：默认内嵌新版网站
 
 # P3：两级决策统一内核（decision_core v2/P2 标定版）＋ 纯逻辑适配层
 import decision_core as dc
@@ -1083,6 +1084,28 @@ def _advance_rt():
     rt["hist"] = rt.get("hist", [])[-59:] + [t]
     rt["n"] = n + 1
 
+
+# ---- 界面选择（2026-10-02 网站更新 v2）----
+# 用户反馈："打开后只提示上线了新版，界面还是旧版，想看新版还得自己点"。
+# 所以改成：**默认直接内嵌显示实验版主站**（全宽 iframe），
+# 想用老的 Python 计算器再切回去（切过去时会显示差异声明）。
+# 新版站点响应头里没有 X-Frame-Options / CSP，可安全内嵌。
+NEW_SITE_URL = "https://chen-1314-yang.github.io/waste-heat-platform/"
+_view = st.radio(
+    "界面选择",
+    ["新版网站（推荐）", "旧版演示计算器（2026-09-05 版内核）"],
+    index=0, horizontal=True, key="_view_mode", label_visibility="collapsed")
+
+if _view.startswith("新版"):
+    st.markdown(
+        '<div style="font-size:13px;opacity:.8;margin:-4px 0 8px 0">'
+        '下方为实验版主站（内嵌显示，含自主学习实验室 / 边界与口径 / 演进记录 / 外部证据）。'
+        '若显示不全（手机或小窗口常见），请'
+        f'<a href="{NEW_SITE_URL}" target="_blank">在新窗口打开</a>'
+        '；想用早期版本的 Python 计算器，切到上方"旧版演示计算器"。</div>',
+        unsafe_allow_html=True)
+    components.iframe(NEW_SITE_URL, height=2600, scrolling=True)
+    st.stop()
 
 # ---- 新版入口横幅（2026-10-02 网站更新）----
 # 只加横幅，**不动任何计算逻辑**。为什么要写明"本页仍是旧内核"：
