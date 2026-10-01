@@ -1084,6 +1084,22 @@ def _advance_rt():
     rt["n"] = n + 1
 
 
+# ---- 新版入口横幅（2026-10-02 网站更新）----
+# 只加横幅，**不动任何计算逻辑**。为什么要写明"本页仍是旧内核"：
+# 按既定纪律（AGENTS.md / 项目地图：Python 内核=历史参考版本，网站引擎=唯一权威），
+# 旧内核不再与网站引擎同步；不写清楚会出现"两个入口数字不一致却没人说明"。
+st.markdown(
+    '<div style="background:linear-gradient(90deg,rgba(14,159,138,.14),rgba(61,111,180,.14));'
+    'border:1px solid rgba(52,211,153,.45);border-radius:10px;padding:10px 14px;'
+    'margin:0 0 12px 0;font-size:14px;line-height:1.75;color:#DCE7F0">'
+    '<b>本平台已更新：</b>最新版为<u>实验版主站</u>（含自主学习实验室、边界与口径、演进记录、外部证据四页）——'
+    '<a href="https://chen-1314-yang.github.io/waste-heat-platform/" target="_blank">打开新版主站</a>'
+    '　｜　手机免登录单页版：'
+    '<a href="https://chen-1314-yang.github.io/waste-heat-advisor-demo/" target="_blank">打开单页版</a>'
+    '<br><span style="opacity:.85">说明：本页（Streamlit 演示平台）的计算仍基于 2026-09-05 版 Python 内核，'
+    '与新版网站引擎在少数口径上存在差异；对外引用请以新版主站的《口径字典》与《边界与口径》为准。</span>'
+    '</div>', unsafe_allow_html=True)
+
 st.markdown(
     '<div class="hero">'
     '<span class="hero-badge">时代杯 · 智能控碳</span>'
