@@ -1085,25 +1085,63 @@ def _advance_rt():
     rt["n"] = n + 1
 
 
-# ---- 界面选择（2026-10-02 网站更新 v2）----
-# 用户反馈："打开后只提示上线了新版，界面还是旧版，想看新版还得自己点"。
-# 所以改成：**默认直接内嵌显示实验版主站**（全宽 iframe），
-# 想用老的 Python 计算器再切回去（切过去时会显示差异声明）。
-# 新版站点响应头里没有 X-Frame-Options / CSP，可安全内嵌。
+# ---- 界面选择（2026-10-02 网站更新 v3：全幅内嵌，去掉 Streamlit 外框）----
+# 需求演变：① 只给入口 → 用户要"打开就是新版"；② 内嵌但仍带 Streamlit 外框 →
+# 用户说"边框和新网站不匹配，我要跟实验版一样的界面 UI"。
+# 根因：老站主题是深色（.streamlit/config.toml: backgroundColor #0B1220），
+#       新版网站是浅色（--bg #F5F9FC），两套配色叠在一起就"不搭"。
+# 做法：新版模式下用 CSS 把 Streamlit 自带的头/工具栏/内边距全部去掉，
+#       背景改成与新版一致，iframe 拉满视口（100vh）；
+#       旧版 Python 计算器改成用网址参数访问（?view=legacy），右上角只留一个很淡的小入口。
 NEW_SITE_URL = "https://chen-1314-yang.github.io/waste-heat-platform/"
-_view = st.radio(
-    "界面选择",
-    ["新版网站（推荐）", "旧版演示计算器（2026-09-05 版内核）"],
-    index=0, horizontal=True, key="_view_mode", label_visibility="collapsed")
 
-if _view.startswith("新版"):
+
+def _qp_get(key):
+    """读网址参数（Streamlit 版本差异：新版 st.query_params / 老版 experimental_get_query_params）。"""
+    try:
+        return str(st.query_params.get(key, "")).lower()
+    except Exception:                                   # noqa: BLE001
+        try:
+            vals = st.experimental_get_query_params().get(key) or [""]
+            return str(vals[0]).lower()
+        except Exception:                               # noqa: BLE001
+            return ""
+
+
+_legacy_mode = _qp_get("view") in ("legacy", "old", "1")
+
+if not _legacy_mode:
     st.markdown(
-        '<div style="font-size:13px;opacity:.8;margin:-4px 0 8px 0">'
-        '下方为实验版主站（内嵌显示，含自主学习实验室 / 边界与口径 / 演进记录 / 外部证据）。'
-        '若显示不全（手机或小窗口常见），请'
-        f'<a href="{NEW_SITE_URL}" target="_blank">在新窗口打开</a>'
-        '；想用早期版本的 Python 计算器，切到上方"旧版演示计算器"。</div>',
-        unsafe_allow_html=True)
+        """
+        <style>
+          /* 去掉 Streamlit 自己的外框，让这个网址看起来就是新版网站 */
+          [data-testid="stHeader"], [data-testid="stToolbar"],
+          [data-testid="stDecoration"], [data-testid="stStatusWidget"],
+          [data-testid="stAppDeployButton"], #MainMenu, footer { display: none !important; }
+          [data-testid="stAppViewContainer"], [data-testid="stMain"], section.main {
+            background: #F5F9FC !important; padding: 0 !important;
+          }
+          .block-container, [data-testid="stMainBlockContainer"] {
+            padding: 0 !important; margin: 0 !important; max-width: 100% !important;
+          }
+          [data-testid="stVerticalBlock"] { gap: 0 !important; }
+          /* iframe 拉满视口（两种选择器都留着，兼容不同版本） */
+          [data-testid="stIFrame"],
+          section.main iframe[src*="waste-heat-platform"] {
+            height: 100vh !important; width: 100% !important;
+            display: block !important; border: 0 !important;
+          }
+          /* 右上角只留一个很淡的旧版入口，不破坏新版观感 */
+          .wh-legacy {
+            position: fixed; right: 12px; top: 8px; z-index: 999999;
+            font-size: 11px; color: #8AA0B4; opacity: .45;
+            text-decoration: none; background: rgba(255,255,255,.6);
+            padding: 2px 8px; border-radius: 999px;
+          }
+          .wh-legacy:hover { opacity: 1; color: #16324F; }
+        </style>
+        <a class="wh-legacy" href="?view=legacy" target="_self">旧版计算器</a>
+        """, unsafe_allow_html=True)
     components.iframe(NEW_SITE_URL, height=2600, scrolling=True)
     st.stop()
 
